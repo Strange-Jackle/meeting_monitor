@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+gliner
+pydantic
+jinja2
+python-multipart
+python-dotenv
+requests
+pydantic-settings
+faster-whisper
+transformers
+torch
+torchaudio

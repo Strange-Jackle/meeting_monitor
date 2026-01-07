@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salesman AI Assistant</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            padding: 2rem;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 150px;
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 1rem;
+            resize: vertical;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            float: right;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 4rem;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .result-box {
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .status-success {
+            background-color: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+        }
+
+        .status-error {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            color: #bdc3c7;
+        }
+
+        .entities-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .entity-chip {
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .entity-label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            margin-right: 0.25rem;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Salesman Meeting Monitor</h1>
+            <p class="subtitle">Extract leads from meeting summaries or audio recordings.</p>
+
+            <!-- Tabs -->
+            <div style="margin-bottom: 2rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <button id="tabText" onclick="switchTab('text')"
+                    style="float: none; margin-right: 1rem; background: transparent; border-bottom: 2px solid var(--primary);">Text
+                    Summary</button>
+                <button id="tabAudio" onclick="switchTab('audio')"
+                    style="float: none; background: transparent; color: var(--text-muted);">Audio Upload</button>
+            </div>
+
+            <!-- Text Input -->
+            <div id="sectionText">
+                <textarea id="summaryInput" placeholder="Paste your meeting notes here..."></textarea>
+            </div>
+
+            <!-- Audio Input -->
+            <div id="sectionAudio"
+                style="display: none; margin-bottom: 2rem; text-align: center; border: 2px dashed rgba(255,255,255,0.1); padding: 3rem; border-radius: 1rem;">
+                <input type="file" id="audioInput" accept=".wav,.mp3,.m4a" style="display: none;"
+                    onchange="updateFileName()">
+                <button onclick="document.getElementById('audioInput').click()"
+                    style="float: none; margin-bottom: 1rem;">Select Audio File</button>
+                <p id="fileName" style="color: var(--text-muted); margin-top: 0.5rem;">No file selected</p>
+            </div>
+
+            <button id="processBtn" onclick="processData()">Process</button>
+            <div style="clear: both;"></div>
+
+            <!-- Results -->
+            <div id="result">
+                <h3>Results</h3>
+                <div class="result-box">
+                    <div id="statusBadge" class="status-badge"></div>
+
+                    <h4>Generated Summary</h4>
+                    <pre id="summaryDisplay" style="white-space: pre-wrap; max-height: 200px; overflow-y: auto;">-</pre>
+
+                    <h4>Extracted Entities</h4>
+                    <div id="entitiesGrid" class="entities-grid"></div>
+
+                    <h4>Odoo Lead Candidate</h4>
+                    <pre id="candidateJson"></pre>
+
+                    <p id="leadIdDisplay" style="margin-top: 1rem; font-weight: bold;"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'text';
+
+        function switchTab(mode) {
+            currentMode = mode;
+            const tabText = document.getElementById('tabText');
+            const tabAudio = document.getElementById('tabAudio');
+            const secText = document.getElementById('sectionText');
+            const secAudio = document.getElementById('sectionAudio');
+
+            if (mode === 'text') {
+                tabText.style.borderBottom = '2px solid var(--primary)';
+                tabText.style.color = 'var(--text)';
+                tabAudio.style.borderBottom = 'none';
+                tabAudio.style.color = 'var(--text-muted)';
+                secText.style.display = 'block';
+                secAudio.style.display = 'none';
+            } else {
+                tabAudio.style.borderBottom = '2px solid var(--primary)';
+                tabAudio.style.color = 'var(--text)';
+                tabText.style.borderBottom = 'none';
+                tabText.style.color = 'var(--text-muted)';
+                secAudio.style.display = 'block';
+                secText.style.display = 'none';
+            }
+        }
+
+        function updateFileName() {
+            const input = document.getElementById('audioInput');
+            const display = document.getElementById('fileName');
+            if (input.files.length > 0) {
+                display.innerText = input.files[0].name;
+            } else {
+                display.innerText = "No file selected";
+            }
+        }
+
+        async function processData() {
+            const btn = document.getElementById('processBtn');
+            const resultDiv = document.getElementById('result');
+
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+            resultDiv.style.opacity = '0.5';
+
+            // Clear previous results
+            document.getElementById('summaryDisplay').innerText = '-';
+            document.getElementById('entitiesGrid').innerHTML = '';
+            document.getElementById('candidateJson').innerText = '';
+            document.getElementById('leadIdDisplay').innerText = '';
+            document.getElementById('statusBadge').className = 'status-badge';
+            document.getElementById('statusBadge').innerText = '';
+
+            try {
+                let response;
+
+                if (currentMode === 'text') {
+                    const content = document.getElementById('summaryInput').value;
+                    if (!content.trim()) { alert("Please enter text."); btn.disabled = false; btn.innerText = "Process"; return; }
+
+                    response = await fetch('/api/v1/process-summary', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: content })
+                    });
+                } else {
+                    const fileInput = document.getElementById('audioInput');
+                    if (fileInput.files.length === 0) { alert("Please select a file."); btn.disabled = false; btn.innerText = "Process"; return; }
+
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+
+                    response = await fetch('/api/v1/process-audio', {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+
+                if (!response.ok) {
+                    throw new Error("Server Error");
+                }
+
+                const data = await response.json();
+                renderResults(data);
+
+            } catch (error) {
+                console.error(error);
+                alert("Error processing request.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Process";
+            }
+        }
+
+        function renderResults(data) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.opacity = '1';
+
+            // Summary
+            if (data.summary) {
+                document.getElementById('summaryDisplay').innerText = data.summary;
+            } else if (data.candidate && data.candidate.source_summary) {
+                document.getElementById('summaryDisplay').innerText = data.candidate.source_summary;
+            }
+
+            // Status
+            const statusBadge = document.getElementById('statusBadge');
+            if (data.status === 'success') {
+                statusBadge.className = 'status-badge status-success';
+                statusBadge.innerText = 'Synced to Odoo';
+            } else {
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.innerText = 'Sync Failed';
+            }
+
+            // Entities
+            const entitiesGrid = document.getElementById('entitiesGrid');
+            if (data.entities) {
+                data.entities.forEach(ent => {
+                    const chip = document.createElement('div');
+                    chip.className = 'entity-chip';
+                    chip.innerHTML = `<span class="entity-label">${ent.label}</span> ${ent.text}`;
+                    entitiesGrid.appendChild(chip);
+                });
+            }
+
+            // Candidate
+            if (data.candidate) {
+                document.getElementById('candidateJson').innerText = JSON.stringify(data.candidate, null, 2);
+            }
+
+            // ID
+            const leadDisplay = document.getElementById('leadIdDisplay');
+            if (data.lead_id) {
+                leadDisplay.innerText = `Created Lead ID: ${data.lead_id}`;
+                leadDisplay.style.color = '#4ade80';
+            } else {
+                leadDisplay.innerText = data.status || "Error";
+                leadDisplay.style.color = '#f87171';
+            }
+        }
+    </script>
+</body>
+
+</html>

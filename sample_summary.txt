@@ -1,0 +1,19 @@
+Meeting Date: October 24, 2023
+Attendees: 
+- Sarah Conner (VP of Engineering, Cyberdyne Systems)
+- Kyle Reese (Security Consultant, TechCom)
+- John Smith (Sales Rep, OurCompany)
+
+Summary:
+I met with the team at Cyberdyne Systems today to discuss their upcoming infrastructure overhaul. Sarah Conner expressed significant interest in our AI monitoring solution. She mentioned that their current system is prone to false positives and they need something more robust. You can reach Sarah at sarah.connor@cyberdyne.net or directly on her mobile at +1-555-0199.
+
+Kyle Reese, who is consulting for them, was more skeptical. He's worried about data privacy and how our "Skynet" module processes facial data. We need to send him our security whitepaper. His email is kyle.reese@techcom.org. He also asked if we have a local support team in Los Angeles.
+
+We also briefly spoke with their CTO, Miles Dyson (miles.dyson@cyberdyne.net), who stopped by the meeting. He is the main decision-maker for the budget. Miles wants a demo scheduled for next Tuesday.
+
+Action Items:
+1. Send security whitepaper to Kyle.
+2. Schedule demo for Miles Dyson.
+3. Follow up with Sarah regarding the contract draft.
+
+The potential deal size is around $50k. They are located at 18144 El Camino Real, Sunnyvale, CA.
