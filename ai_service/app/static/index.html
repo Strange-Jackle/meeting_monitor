@@ -256,6 +256,84 @@
             color: var(--text-muted);
             font-size: 0.75rem;
         }
+
+        /* Deep Dive Details */
+        .toast-card {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .toast-card:hover {
+            transform: translateX(-5px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .toast-card.expanded {
+            border-left: 4px solid var(--primary);
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .toast-details {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 0.85em;
+            display: none;
+            /* Hidden by default */
+        }
+
+        .toast-card.expanded .toast-details {
+            display: block;
+            /* Show when expanded */
+            animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .news-item {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+        }
+
+        .news-item:last-child {
+            border-bottom: none;
+        }
+
+        .news-link {
+            color: #60a5fa;
+            /* Light blue */
+            text-decoration: none;
+            font-weight: 500;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .news-link:hover {
+            text-decoration: underline;
+        }
+
+        .news-meta {
+            font-size: 0.8em;
+            color: #94a3b8;
+        }
+
+        .details-loader {
+            text-align: center;
+            padding: 10px;
+            color: #94a3b8;
+            font-style: italic;
+        }
     </style>
 </head>
 
@@ -487,6 +565,8 @@
                 const card = document.createElement('div');
                 card.className = 'toast-card';
                 card.style.animationDelay = `${index * 150}ms`;
+                // Add click handler for deep dive
+                card.onclick = () => toggleInsight(card, item.entity);
 
                 const verdictClass = item.verdict || 'Neutral';
                 const sourceText = item.sources ? item.sources.join(', ') : 'Web';
@@ -498,14 +578,83 @@
                     </div>
                     <div class="toast-body">
                         ${item.summary}
+                         <div style="margin-top:5px; font-size:0.8em; color:#888;">
+                            Sources: ${sourceText}
+                            <div style="float:right; color:#007bff; font-weight:bold; font-size:1.1em;">&#x2193;</div>
+                        </div>
                     </div>
-                    <div class="toast-footer">
+                     <div class="toast-footer">
                         <span class="verdict ${verdictClass}">${item.verdict || 'Info'}</span>
                         <span class="sources">via ${sourceText}</span>
+                    </div>
+                    <!-- Container for Deep Dive -->
+                    <div class="toast-details" id="details-${item.entity.replace(/\s+/g, '-')}">
+                        <!-- Loaded content goes here -->
                     </div>
                 `;
                 list.appendChild(card);
             });
+        }
+
+        async function toggleInsight(card, entity) {
+            // Check if already expanded
+            if (card.classList.contains('expanded')) {
+                card.classList.remove('expanded');
+                return;
+            }
+
+            // Collapse others (accordion style)
+            document.querySelectorAll('.toast-card.expanded').forEach(c => c.classList.remove('expanded'));
+
+            card.classList.add('expanded');
+            const detailsContainer = card.querySelector('.toast-details');
+
+            // If already loaded, just show (handled by CSS display:block). Reload if empty.
+            if (detailsContainer.innerHTML.trim() === '') {
+                detailsContainer.innerHTML = '<div class="details-loader">Thinking deeper...</div>';
+
+                try {
+                    const response = await fetch('/api/v1/fetch-insight-details', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ entity: entity })
+                    });
+
+                    if (!response.ok) throw new Error('API Failed');
+                    const data = await response.json();
+
+                    // Build News HTML
+                    let newsHtml = '<strong>Latest News:</strong><br>';
+                    if (data.news && data.news.length > 0) {
+                        data.news.forEach(n => {
+                            newsHtml += `
+                                <div class="news-item">
+                                    <a href="${n.url}" target="_blank" class="news-link">${n.title}</a>
+                                    <div class="news-meta">${n.source || 'News'} &bull; ${n.date || 'Recent'}</div>
+                                </div>
+                            `;
+                        });
+                    } else {
+                        newsHtml += '<small>No recent news found.</small><br>';
+                    }
+
+                    // Build Analysis HTML
+                    let analysisHtml = '<div style="margin-top:10px;"><strong>Analysis:</strong><br>';
+                    if (data.analysis && data.analysis.length > 0) {
+                        // Just take the first good snippet or join them
+                        analysisHtml += `<small>${data.analysis[0]}</small>`;
+                    } else {
+                        analysisHtml += '<small>No detailed analysis available.</small>';
+                    }
+                    analysisHtml += '</div>';
+
+                    detailsContainer.innerHTML = newsHtml + analysisHtml;
+
+                } catch (e) {
+                    detailsContainer.innerHTML = '<div style="color:red; font-size:0.9em;">Failed to load details.</div>';
+                    console.error(e);
+                }
+            }
         }
     </script>
 </body>

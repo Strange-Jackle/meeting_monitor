@@ -79,6 +79,53 @@ class WebInsightService:
             # ddgs.text() returns a generator, consume it to get a list
             return list(ddgs.text(query, max_results=5))
 
+    async def get_detailed_insights_async(self, entity_text: str) -> dict:
+        """
+        Fetches deeper insights:
+        1. Recent News Headlines
+        2. Pros/Cons snapshot
+        """
+        print(f"Deep diving into: {entity_text}...")
+        
+        try:
+            results = await asyncio.to_thread(self._search_details_ddg, entity_text)
+            return results
+        except Exception as e:
+            logging.error(f"Detailed search failed: {e}")
+            return {"error": str(e)}
+
+    def _search_details_ddg(self, entity):
+        """Helper for granular searches"""
+        news_items = []
+        pros_cons = []
+        
+        with DDGS() as ddgs:
+            # 1. News Search
+            # ddgs.news returns a generator
+            news_gen = ddgs.news(keywords=entity, max_results=3)
+            for r in news_gen:
+                news_items.append({
+                    "title": r.get('title'),
+                    "url": r.get('url'),
+                    "date": r.get('date'),
+                    "source": r.get('source')
+                })
+            
+            # 2. Pros/Cons Text Search
+            # We look for "reviews" or "pros cons" specifically
+            query = f"{entity} pros cons review summary"
+            text_gen = ddgs.text(query, max_results=3)
+            for r in text_gen:
+                # Simple extraction of body text
+                body = r.get('body', '')
+                if body:
+                    pros_cons.append(body)
+
+        return {
+            "news": news_items,
+            "analysis": pros_cons
+        }
+
 if __name__ == "__main__":
     async def test():
         s = WebInsightService()

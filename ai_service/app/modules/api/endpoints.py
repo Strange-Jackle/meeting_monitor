@@ -8,12 +8,28 @@ import uuid
 router = APIRouter()
 processor = LeadWorkflowProcessor() # Singleton-ish context
 
+from pydantic import BaseModel
+
+class InsightRequest(BaseModel):
+    entity: str
+
 @router.post("/process-summary")
 async def process_summary(summary: SalesSummary):
     try:
         result = await processor.process_summary_to_lead(summary.content)
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/fetch-insight-details")
+async def fetch_insight_details(req: InsightRequest):
+    try:
+        # We access the insight service directly from the processor instance
+        # In a cleaner architecture, this would be a dependency injection
+        data = await processor.insights_service.get_detailed_insights_async(req.entity)
+        return data
+    except Exception as e:
+        print(f"Error fetching details: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/process-audio")
