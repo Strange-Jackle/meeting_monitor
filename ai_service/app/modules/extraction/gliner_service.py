@@ -7,7 +7,7 @@ class GLiNERService(EntityExtractor):
     def __init__(self):
         print(f"Loading GLiNER model: {settings.GLINER_MODEL_NAME}...")
         self.model = GLiNER.from_pretrained(settings.GLINER_MODEL_NAME)
-        self.labels = ["person", "email", "phone number", "organization", "location", "date"]
+        self.labels = ["person", "email", "phone number", "organization", "location", "date", "product", "service"]
         print("GLiNER model loaded.")
 
     def extract(self, text: str) -> List[ExtractedEntity]:

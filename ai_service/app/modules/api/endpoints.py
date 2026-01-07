@@ -11,7 +11,7 @@ processor = LeadWorkflowProcessor() # Singleton-ish context
 @router.post("/process-summary")
 async def process_summary(summary: SalesSummary):
     try:
-        result = processor.process_summary_to_lead(summary.content)
+        result = await processor.process_summary_to_lead(summary.content)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -28,7 +28,7 @@ async def process_audio(file: UploadFile = File(...)):
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        result = processor.process_audio_file(temp_path)
+        result = await processor.process_audio_file(temp_path)
         return result
         
     except Exception as e:

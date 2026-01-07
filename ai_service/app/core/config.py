@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     GLINER_MODEL_NAME: str = "urchade/gliner_small-v2.1"
     WHISPER_MODEL_SIZE: str = "medium" # or "small", "base"
     SUMMARIZATION_MODEL: str = "knkarthick/MEETING_SUMMARY"
+    
+    # Gemini Config
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     class Config:
         case_sensitive = True

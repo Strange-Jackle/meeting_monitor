@@ -4,8 +4,15 @@ from app.modules.extraction.gliner_service import GLiNERService
 from app.modules.odoo_client.client import OdooClient
 from app.modules.transcription.service import TranscriptionService
 from app.modules.summarization.service import SummarizationService
+from app.modules.intelligence.gemini_service import GeminiService
+from app.modules.intelligence.web_insight_service import WebInsightService # New import
 import shutil
 import os
+import asyncio
+import traceback # New import
+
+import nest_asyncio
+nest_asyncio.apply()
 
 class LeadWorkflowProcessor:
     def __init__(self):
@@ -15,13 +22,69 @@ class LeadWorkflowProcessor:
         # Initialize Audio Services
         self.transcriber = TranscriptionService()
         self.summarizer = SummarizationService()
+        # Use Web Insight Service (DuckDuckGo + VADER) - No API Key needed
+        self.insights_service = WebInsightService()
 
-    def process_summary_to_lead(self, summary_content: str) -> Dict[str, Any]:
+    async def process_summary_to_lead(self, summary_content: str) -> Dict[str, Any]:
         """
         Orchestrates: Input -> Extract -> Transform -> Odoo -> Return Result
         """
+        print("Processing summary for lead extraction...")
+        
         # 1. Extraction
         entities: List[ExtractedEntity] = self.extractor.extract(summary_content)
+        print(f"Extracted {len(entities)} entities.")
+
+        # 1.5. Gather Insights (Async/Concurrent)
+        insights = []
+        tasks = []
+        seen_entities = set()
+
+        async def fetch_with_meta(text, label):
+             try:
+                data = await self.insights_service.get_entity_insights_async(text, label)
+                if data:
+                    data["entity"] = text
+                    data["type"] = label
+                return data
+             except Exception as e:
+                print(f"Error processing insight for {text}: {e}")
+                return None
+
+        tasks = []
+        seen_entities = set()
+        
+        # Web Search is free, can handle more concurrency than Gemini Free Tier
+        MAX_INSIGHTS = 8
+        insights = []
+
+        try:
+            print(f"Fetching web insights for top {MAX_INSIGHTS} entities...")
+
+            for e in entities:
+                 if len(tasks) >= MAX_INSIGHTS:
+                     break
+
+                 if e.label in ["organization", "product", "service"]:
+                    key = (e.text, e.label)
+                    if key not in seen_entities:
+                        seen_entities.add(key)
+                        tasks.append(fetch_with_meta(e.text, e.label))
+            
+            if tasks:
+                # Run concurrently for speed
+                insights_results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Filter out exceptions and Nones
+                for r in insights_results:
+                    if isinstance(r, Exception):
+                        print(f"Insight task failed: {r}")
+                    elif r:
+                        insights.append(r)
+        except Exception as e:
+            print(f"CRITICAL ERROR in insight gathering: {e}")
+            traceback.print_exc()
+            # Continue without insights rather than failing the request
+            insights = []
         
         # 2. Transformation / Mapping (Simple Logic)
         candidate = self._map_entities_to_lead(entities, summary_content)
@@ -38,10 +101,11 @@ class LeadWorkflowProcessor:
             "status": status,
             "lead_id": lead_id,
             "entities": [e.dict() for e in entities],
+            "insights": insights,
             "candidate": candidate.dict()
         }
 
-    def process_audio_file(self, file_path: str) -> Dict[str, Any]:
+    async def process_audio_file(self, file_path: str) -> Dict[str, Any]:
         """
         Orchestrates: Audio -> Transcript -> Summary -> [Process Summary Logic]
         """
@@ -56,7 +120,7 @@ class LeadWorkflowProcessor:
         print("Summarization complete.")
         
         # 3. Process the Summary (Reuse existing logic)
-        result = self.process_summary_to_lead(summary_text)
+        result = await self.process_summary_to_lead(summary_text)
         
         # Add intermediate artifacts to result
         result["transcript"] = transcript
