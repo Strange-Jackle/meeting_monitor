@@ -59,11 +59,14 @@ class SessionState:
     """Current state of a live session."""
     status: SessionStatus = SessionStatus.IDLE
     start_time: Optional[float] = None
+    session_id: Optional[int] = None  # Database session ID
     
-    # Accumulated data
-    transcript_segments: List[str] = field(default_factory=list)
+    # Accumulated data - now with speaker info
+    transcript_segments: List[Dict] = field(default_factory=list)  # [{speaker, text, start, end}]
     quick_hints: List[str] = field(default_factory=list)
     detected_entities: List[str] = field(default_factory=list)
+    starred_hints: List[str] = field(default_factory=list)
+    battlecards: List[Dict] = field(default_factory=list)
     
     # Stats
     screenshots_processed: int = 0
@@ -72,7 +75,41 @@ class SessionState:
     
     @property
     def full_transcript(self) -> str:
-        return " ".join(self.transcript_segments)
+        """Get plain text transcript."""
+        texts = [seg.get("text", "") if isinstance(seg, dict) else seg for seg in self.transcript_segments]
+        return " ".join(texts)
+    
+    @property
+    def formatted_transcript(self) -> str:
+        """Get transcript with speaker labels."""
+        if not self.transcript_segments:
+            return ""
+        
+        lines = []
+        current_speaker = None
+        current_text = []
+        
+        for seg in self.transcript_segments:
+            if isinstance(seg, dict):
+                speaker = seg.get("speaker", "SPEAKER_00")
+                text = seg.get("text", "").strip()
+            else:
+                speaker = "SPEAKER_00"
+                text = str(seg).strip()
+            
+            if speaker != current_speaker:
+                if current_text:
+                    lines.append(f"[{current_speaker}]: {' '.join(current_text)}")
+                current_speaker = speaker
+                current_text = [text] if text else []
+            else:
+                if text:
+                    current_text.append(text)
+        
+        if current_text:
+            lines.append(f"[{current_speaker}]: {' '.join(current_text)}")
+        
+        return "\n".join(lines)
     
     @property
     def duration(self) -> float:
@@ -239,37 +276,30 @@ class LiveAssistantSession:
         
         def is_hallucination(text: str) -> bool:
             """Detect Whisper hallucinations from silent audio."""
-            if not text or len(text) < 3:
+            text = text.strip()
+            if not text:
+                return True
+                
+            # Allow short "Yes", "No", "Ok"
+            if len(text) < 2:
+                print(f"[Filter] Text too short (<2): '{text}'")
                 return True
             
             # Check for repeated single characters (!!!!!!, ......, etc.)
-            if re.match(r'^(.)\1{5,}$', text.strip()):
-                return True
-            
-            # Check for mostly non-alphanumeric (!!!!, ????, etc.)
-            alphanumeric = sum(c.isalnum() or c.isspace() for c in text)
-            if alphanumeric < len(text) * 0.5:
+            if re.match(r'^(.)\1{4,}$', text):
+                print(f"[Filter] Repeated characters: '{text}'")
                 return True
             
             # Check for common hallucination phrases
             hallucination_phrases = [
-                "thank you for watching",
-                "thanks for watching",
-                "please subscribe",
-                "like and subscribe",
-                "see you next time",
-                "goodbye",
-                "music",
-                "[music]",
-                "(music)",
+                "thank you for watching", "thanks for watching",
+                "please subscribe", "like and subscribe",
+                "see you next time", "[music]", "(music)",
+                "subtitle by", "copyright", "all rights reserved"
             ]
-            text_lower = text.lower().strip()
+            text_lower = text.lower()
             if any(phrase in text_lower for phrase in hallucination_phrases):
-                return True
-            
-            # Check minimum word count
-            words = text.split()
-            if len(words) < 2:
+                print(f"[Filter] Hallucination phrase detected: '{text}'")
                 return True
             
             return False
@@ -289,29 +319,57 @@ class LiveAssistantSession:
                 # Save chunk to temp file
                 wav_path = LocalCaptureService.audio_chunk_to_wav_file(chunk)
                 
-                # Transcribe (this is the slow part)
-                text = self.transcriber.transcribe(wav_path)
-                
-                # Clean up temp file
+                segments = []
                 try:
-                    os.remove(wav_path)
-                except:
-                    pass
+                    # Transcribe with speaker diarization
+                    segments = self.transcriber.transcribe_with_speakers(wav_path)
+                    
+                    # Fallback to plain text if diarization returns empty
+                    if not segments:
+                        text = self.transcriber.transcribe(wav_path)
+                        if text and text.strip():
+                            segments = [{"speaker": "SPEAKER_00", "text": text.strip(), "start": 0, "end": 0}]
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(wav_path):
+                        try:
+                            os.remove(wav_path)
+                        except:
+                            pass
                 
-                # Filter out hallucinations
-                if text and text.strip() and not is_hallucination(text):
-                    self.state.transcript_segments.append(text.strip())
-                    self.state.audio_chunks_processed += 1
+                # Process valid segments
+                if segments:
+                    valid_segments = []
+                    for seg in segments:
+                        text = seg.get("text", "").strip()
+                        
+                        # Filter out hallucinations
+                        if text and not is_hallucination(text):
+                            valid_segments.append(seg)
                     
-                    print(f"[LiveSession] Transcript: {text[:50]}...")
-                    
-                    if self._on_transcript_update:
-                        self._on_transcript_update(text)
-                elif text:
-                    print(f"[LiveSession] Filtered hallucination: {text[:30]}...")
+                    if valid_segments:
+                        # Add to transcript
+                        self.state.transcript_segments.extend(valid_segments)
+                        self.state.audio_chunks_processed += 1
+                        
+                        # Format for display (with speaker labels)
+                        display_text = " | ".join([
+                            f"[{s.get('speaker', 'SPK')}] {s.get('text', '')[:30]}" 
+                            for s in valid_segments[:2]  # Show first 2 segments
+                        ])
+                        print(f"[LiveSession] Transcript: {display_text}...")
+                        
+                        # Send formatted text to UI
+                        if self._on_transcript_update:
+                            formatted_text = self.transcriber.format_transcript_with_speakers(valid_segments)
+                            self._on_transcript_update(formatted_text)
+                    else:
+                        print("[LiveSession] All segments filtered as hallucinations")
                 
             except Exception as e:
                 print(f"[LiveSession] Transcription error: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Start transcription in background thread
         thread = threading.Thread(target=transcribe_in_background, daemon=True)
@@ -409,15 +467,24 @@ class LiveAssistantSession:
                 lead_company = entity.text
         
         # 4. Create Odoo lead
-        lead_result = self.odoo.create_lead({
-            "name": lead_name,
-            "email": lead_email,
-            "phone": lead_phone,
-            "company": lead_company,
-            "notes": summary,
-            "source": "Stealth Assistant",
-            "raw_transcript": transcript[:5000]  # Limit size
-        })
+        # 4. Create Odoo lead (in background thread to prevent blocking)
+        try:
+            print("[LiveSession] Syncing to Odoo (background)...")
+            lead_result = await asyncio.to_thread(
+                self.odoo.create_lead,
+                {
+                    "name": lead_name,
+                    "email": lead_email,
+                    "phone": lead_phone,
+                    "company": lead_company,
+                    "notes": summary,
+                    "source": "Stealth Assistant",
+                    "raw_transcript": transcript[:5000]
+                }
+            )
+        except Exception as e:
+            print(f"[LiveSession] Odoo Sync Failed (Non-critical): {e}")
+            lead_result = {"id": 0, "status": "failed_local_only"}
         
         return {
             "lead_id": lead_result.get("id"),

@@ -110,6 +110,15 @@ class LocalCaptureService:
             return
         
         self._running = True
+        
+        # Check for demo simulation mode
+        from app.core.config import settings
+        if settings.DEMO_SIMULATION_MODE:
+            print("[LocalCapture] *** DEMO SIMULATION MODE ACTIVE ***")
+            self._demo_thread = threading.Thread(target=self._demo_simulation_loop, daemon=True)
+            self._demo_thread.start()
+            return
+        
         print("[LocalCapture] Starting capture loops...")
         
         # Start screen capture (async)
@@ -256,54 +265,65 @@ class LocalCaptureService:
         """Threaded loop for audio capture using WASAPI."""
         print(f"[LocalCapture] Audio capture loop started (chunk duration: {self.config.audio_chunk_duration}s)")
         
-        # Find loopback device and its native sample rate
-        device_id, native_rate = self._get_loopback_device()
-        
-        # Store the actual sample rate we're using
-        self._actual_sample_rate = native_rate
-        
-        # Audio buffer
-        self._audio_buffer = []
-        self._audio_buffer_start_time = time.time()
-        
-        def audio_callback(indata, frames, time_info, status):
-            """Called by sounddevice for each audio block."""
-            if status:
-                print(f"[LocalCapture] Audio status: {status}")
+        while self._running:
+            try:
+                # Find loopback device and its native sample rate
+                device_id, native_rate = self._get_loopback_device()
+                
+                # Store the actual sample rate we're using
+                self._actual_sample_rate = native_rate
+                
+                # Reset buffer on start
+                self._audio_buffer = []
+                self._audio_buffer_start_time = time.time()
+                
+                def audio_callback(indata, frames, time_info, status):
+                    """Called by sounddevice for each audio block."""
+                    if status:
+                        print(f"[LocalCapture] Audio status: {status}")
+                    
+                    # Copy data to buffer
+                    self._audio_buffer.append(indata.copy())
+                    
+                    # Check if we have enough for a chunk (using actual sample rate)
+                    total_samples = sum(len(chunk) for chunk in self._audio_buffer)
+                    chunk_samples = int(self.config.audio_chunk_duration * self._actual_sample_rate)
+                    
+                    if total_samples >= chunk_samples:
+                        self._process_audio_buffer()
+                
+                # Open stream with DEVICE'S native sample rate (not forced 16kHz)
+                print(f"[LocalCapture] Opening audio stream at {native_rate}Hz...")
+                self._audio_stream = sd.InputStream(
+                    device=device_id,
+                    samplerate=native_rate,  # Use device's native rate
+                    channels=self.config.audio_channels,
+                    dtype=np.float32,
+                    callback=audio_callback,
+                    blocksize=1024
+                )
+                self._audio_stream.start()
+                print(f"[LocalCapture] Audio stream started successfully!")
+                
+                # Keep thread alive while running and stream is active
+                while self._running and self._audio_stream.active:
+                    time.sleep(0.5)
+                    
+            except Exception as e:
+                print(f"[LocalCapture] Audio capture error (restarting in 2s): {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(2.0)
             
-            # Copy data to buffer
-            self._audio_buffer.append(indata.copy())
-            
-            # Check if we have enough for a chunk (using actual sample rate)
-            total_samples = sum(len(chunk) for chunk in self._audio_buffer)
-            chunk_samples = int(self.config.audio_chunk_duration * self._actual_sample_rate)
-            
-            if total_samples >= chunk_samples:
-                self._process_audio_buffer()
-        
-        try:
-            # Open stream with DEVICE'S native sample rate (not forced 16kHz)
-            print(f"[LocalCapture] Opening audio stream at {native_rate}Hz...")
-            self._audio_stream = sd.InputStream(
-                device=device_id,
-                samplerate=native_rate,  # Use device's native rate
-                channels=self.config.audio_channels,
-                dtype=np.float32,
-                callback=audio_callback,
-                blocksize=1024
-            )
-            self._audio_stream.start()
-            print(f"[LocalCapture] Audio stream started successfully!")
-            
-            # Keep thread alive while running
-            while self._running:
-                time.sleep(0.1)
-            
-        except Exception as e:
-            print(f"[LocalCapture] Audio capture error: {e}")
-            import traceback
-            traceback.print_exc()
-        
+            finally:
+                if self._audio_stream:
+                    try:
+                        self._audio_stream.stop()
+                        self._audio_stream.close()
+                    except:
+                        pass
+                    self._audio_stream = None
+
         print("[LocalCapture] Audio capture loop ended")
     
     def _process_audio_buffer(self):
@@ -389,6 +409,88 @@ class LocalCaptureService:
         sf.write(filepath, chunk.data, chunk.sample_rate)
         
         return filepath
+    
+    def _demo_simulation_loop(self):
+        """
+        Demo simulation mode - replays transcript at realistic pace.
+        Used for reliable hackathon demos when live audio might fail.
+        """
+        import os
+        
+        # Find demo transcript file
+        demo_file = os.path.join(
+            os.path.dirname(__file__), 
+            "..", "..", "..", "demo_transcript.txt"
+        )
+        
+        if not os.path.exists(demo_file):
+            print(f"[Demo] Warning: Demo transcript not found at {demo_file}")
+            demo_file = os.path.join(os.path.dirname(__file__), "..", "..", "demo_transcript.txt")
+        
+        if not os.path.exists(demo_file):
+            print("[Demo] Error: No demo transcript file found!")
+            return
+        
+        # Read transcript
+        with open(demo_file, "r", encoding="utf-8") as f:
+            transcript_lines = [line.strip() for line in f.readlines() if line.strip()]
+        
+        print(f"[Demo] Loaded {len(transcript_lines)} lines for simulation")
+        
+        # Simulate at realistic pace (one line every 5-10 seconds)
+        import random
+        
+        chunk_size = 3  # Combine 3 lines per "chunk"
+        line_index = 0
+        
+        while self._running and line_index < len(transcript_lines):
+            # Combine several lines into one chunk
+            chunk_lines = transcript_lines[line_index:line_index + chunk_size]
+            chunk_text = " ".join(chunk_lines)
+            line_index += chunk_size
+            
+            # Parse speaker from text (format: "Speaker: text")
+            speaker = "SPEAKER_00"
+            text = chunk_text
+            if ": " in chunk_text:
+                parts = chunk_text.split(": ", 1)
+                speaker_raw = parts[0].strip().upper().replace(" ", "_")
+                if "SALES" in speaker_raw or "REP" in speaker_raw:
+                    speaker = "SALES_REP"
+                elif "CLIENT" in speaker_raw:
+                    speaker = "CLIENT"
+                else:
+                    speaker = speaker_raw[:15]  # Truncate long names
+                text = parts[1] if len(parts) > 1 else chunk_text
+            
+            # Create fake audio chunk with silence (just for the callback structure)
+            # The actual text comes from the transcript file
+            fake_audio = np.zeros(int(self.config.audio_sample_rate * self.config.audio_chunk_duration), dtype=np.float32)
+            
+            chunk = AudioChunk(
+                data=fake_audio + np.random.randn(len(fake_audio)) * 0.001,  # Tiny noise so not detected as silent
+                sample_rate=self.config.audio_sample_rate,
+                timestamp=time.time(),
+                duration=self.config.audio_chunk_duration
+            )
+            
+            # Store the simulated text in the chunk metadata by using a special attribute
+            chunk._demo_text = text
+            chunk._demo_speaker = speaker
+            
+            # Call the audio callback
+            if self._on_audio_chunk:
+                print(f"[Demo] Simulating: [{speaker}] {text[:40]}...")
+                self._on_audio_chunk(chunk)
+            
+            # Wait realistic time (6-10 seconds)
+            wait_time = random.uniform(6.0, 10.0)
+            for _ in range(int(wait_time * 10)):  # Check running every 0.1s
+                if not self._running:
+                    break
+                time.sleep(0.1)
+        
+        print("[Demo] Simulation complete!")
 
 
 # ==================== TEST FUNCTIONS ====================

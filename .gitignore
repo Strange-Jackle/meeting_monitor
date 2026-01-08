@@ -18,9 +18,14 @@ venv/
 .vscode/
 *.swp
 
-# Environment (KEEP PRIVATE!)
+# Environment Variables (PRIVATE!)
 .env
 *.env
+
+# Database (local SQLite)
+*.db
+*.sqlite3
+meeting_monitor.db
 
 # Logs & Temp
 *.log
@@ -32,18 +37,22 @@ temp_audio/
 .DS_Store
 Thumbs.db
 
-# Test/Media artifacts
+# Audio/Media artifacts
 *.wav
 *.mp3
 *.webm
 test_*.png
 
-# Model cache (large)
+# Model cache (large files)
 hub/
 models/
 *.pt
 *.bin
 *.onnx
+*.safetensors
+
+# HuggingFace cache
+.cache/
 
 # Deprecated
 vexa_engine/
@@ -53,3 +62,12 @@ vexa_engine/
 .pytest_cache/
 .mypy_cache/
 htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Scripts
+check_whisperx.py
+ARCHITECTURE_FOR_LLM.md
+hackathon_upgrade_spec.md
+ARCHITECTURE_FOR_LLM.md

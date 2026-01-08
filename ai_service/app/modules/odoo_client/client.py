@@ -12,6 +12,10 @@ class OdooClient(LeadRepository):
         self.common = None
         self.models = None
         self.uid = None
+        
+        # Set global socket timeout to prevent indefinite hanging on Odoo calls
+        import socket
+        socket.setdefaulttimeout(10.0)  # 10 seconds timeout
 
     def connect(self):
         if not self.uid:

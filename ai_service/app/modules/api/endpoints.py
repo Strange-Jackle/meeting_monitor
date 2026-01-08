@@ -235,6 +235,91 @@ async def reset_session():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class StarHintRequest(BaseModel):
+    """Request to star/save a hint."""
+    hint_text: str
+    session_id: Optional[int] = None
+
+
+class BattlecardRequest(BaseModel):
+    """Request for competitive battlecard."""
+    competitor_name: str
+    context: Optional[str] = ""
+
+
+@router.post("/star-hint")
+async def star_hint(request: StarHintRequest):
+    """
+    Star/save an important hint for later CRM sync.
+    
+    The salesman can click a hint to save it. All starred hints
+    will be included in the Odoo lead description.
+    """
+    try:
+        from app.core.database import get_database
+        
+        session = get_active_session()
+        session_id = request.session_id
+        
+        # Use current session ID if not specified
+        if not session_id and session:
+            session_id = session.state.session_id
+        
+        if not session_id:
+            # Create a temporary session ID
+            session_id = 0
+        
+        db = await get_database()
+        hint_id = await db.star_hint(session_id, request.hint_text)
+        
+        # Also add to session state if active
+        if session and request.hint_text not in session.state.starred_hints:
+            session.state.starred_hints.append(request.hint_text)
+        
+        return {
+            "status": "starred",
+            "hint_id": hint_id,
+            "message": f"Hint saved: {request.hint_text[:30]}..."
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/battlecard")
+async def get_battlecard(request: BattlecardRequest):
+    """
+    Generate a competitive battlecard for a competitor.
+    
+    Returns 3 counter-points the salesman can use immediately.
+    """
+    try:
+        from app.modules.intelligence.gemini_service import GeminiService
+        
+        gemini = GeminiService()
+        battlecard = await gemini.get_battlecard(
+            competitor_name=request.competitor_name,
+            context=request.context
+        )
+        
+        # Save to session if active
+        session = get_active_session()
+        if session:
+            session.state.battlecards.append(battlecard)
+        
+        return {
+            "status": "success",
+            "battlecard": battlecard
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/session-status")
 async def get_session_status():
     """
