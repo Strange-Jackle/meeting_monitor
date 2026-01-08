@@ -1,12 +1,16 @@
 from transformers import pipeline
 from app.core.config import settings
+import torch
 
 class SummarizationService:
     def __init__(self):
-        print(f"Loading Summarization model: {settings.SUMMARIZATION_MODEL} ...")
-        # device=-1 means CPU. Use device=0 for GPU.
-        self.summarizer = pipeline("summarization", model=settings.SUMMARIZATION_MODEL, device=-1)
-        print("Summarization model loaded.")
+        # Use GPU if available, fallback to CPU
+        device = 0 if torch.cuda.is_available() else -1
+        device_name = "GPU" if device == 0 else "CPU"
+        
+        print(f"Loading Summarization model: {settings.SUMMARIZATION_MODEL} on {device_name}...")
+        self.summarizer = pipeline("summarization", model=settings.SUMMARIZATION_MODEL, device=device)
+        print(f"Summarization model loaded on {device_name}.")
 
     def summarize(self, text: str) -> str:
         # BART has a limit of 1024 tokens. We should ideally chunk long text.

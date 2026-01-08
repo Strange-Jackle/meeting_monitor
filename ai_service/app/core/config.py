@@ -1,5 +1,10 @@
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 import os
+
+# Load .env file from app directory
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv()  # Also try current directory
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Salesman AI Service"
@@ -13,7 +18,7 @@ class Settings(BaseSettings):
     
     # AI Config
     GLINER_MODEL_NAME: str = "urchade/gliner_small-v2.1"
-    WHISPER_MODEL_SIZE: str = "medium" # or "small", "base"
+    WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "small")  # tiny/base/small/medium/large
     SUMMARIZATION_MODEL: str = "knkarthick/MEETING_SUMMARY"
     
     # Gemini Config

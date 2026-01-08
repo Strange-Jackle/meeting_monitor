@@ -7,7 +7,7 @@ class GeminiService:
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
         self.model_name = settings.GEMINI_MODEL
-        self.use_mock = True # Force mock for testing stability
+        self.use_mock = False  # Disabled for production demo - use real Gemini API
         
         if self.api_key:
             try:
@@ -115,6 +115,108 @@ class GeminiService:
         except Exception as e:
             logging.error(f"Error fetching Gemini insights for {entity_text}: {e}")
             return None
+
+    async def get_vision_insights(
+        self,
+        screenshot_base64: str,
+        transcript_context: str,
+        max_hints: int = 3
+    ) -> dict:
+        """
+        Analyze a screenshot + transcript context to generate real-time sales hints.
+        
+        Args:
+            screenshot_base64: Base64-encoded screenshot image
+            transcript_context: Recent transcript text for context
+            max_hints: Maximum number of quick hints to generate
+            
+        Returns:
+            {
+                "quick_hints": ["Mention pricing now", "Ask about timeline", ...],
+                "detected_entities": ["John Smith", "Acme Corp", ...],
+                "meeting_context": "Product demo discussion",
+                "sentiment": "positive"
+            }
+        """
+        if not self.model:
+            # Return mock hints when API is unavailable
+            return {
+                "quick_hints": ["Listen actively", "Take notes", "Ask questions"],
+                "detected_entities": [],
+                "meeting_context": "Meeting in progress",
+                "sentiment": "neutral"
+            }
+        
+        prompt = f"""You are a real-time sales assistant analyzing a live meeting.
+
+CURRENT TRANSCRIPT CONTEXT:
+{transcript_context[-2000:]}
+
+Analyze the screenshot and transcript to provide actionable hints for a salesperson.
+
+RESPOND IN THIS EXACT JSON FORMAT:
+{{
+    "quick_hints": ["Hint 1 (max 4 words)", "Hint 2 (max 4 words)", "Hint 3 (max 4 words)"],
+    "detected_entities": ["Any person names, company names, or products mentioned"],
+    "meeting_context": "Brief description of what's being discussed",
+    "sentiment": "positive/neutral/negative"
+}}
+
+GUIDELINES FOR HINTS:
+- Be specific and actionable (e.g., "Mention pricing now", "Ask about budget")
+- Focus on sales opportunities
+- Keep each hint to 3-4 words maximum
+- Prioritize by urgency/importance
+"""
+
+        try:
+            # Import PIL for image handling
+            from PIL import Image
+            import io
+            import base64
+            
+            # Decode base64 image
+            image_data = base64.b64decode(screenshot_base64)
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Generate content with image + text
+            response = await self.model.generate_content_async([prompt, image])
+            
+            text = response.text.strip()
+            # Clean up JSON from markdown formatting
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            
+            result = json.loads(text.strip())
+            
+            # Ensure we have the expected structure
+            if "quick_hints" not in result:
+                result["quick_hints"] = []
+            if "detected_entities" not in result:
+                result["detected_entities"] = []
+            if "meeting_context" not in result:
+                result["meeting_context"] = "Meeting in progress"
+            if "sentiment" not in result:
+                result["sentiment"] = "neutral"
+                
+            # Limit hints
+            result["quick_hints"] = result["quick_hints"][:max_hints]
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"Error in vision insights: {e}")
+            return {
+                "quick_hints": ["Focus on client needs"],
+                "detected_entities": [],
+                "meeting_context": "Analysis unavailable",
+                "sentiment": "neutral"
+            }
+
 
 if __name__ == "__main__":
     import asyncio

@@ -1,8 +1,0 @@
-Test Scenario 1 (Tech Products):
-"I just saw the reviews for the new Apple Vision Pro. People on Reddit are saying the pass-through video is amazing, but the weight is an issue. Also, discussed the Tesla Cybertruck production delays with the team."
-
-Test Scenario 2 (Services):
-"We need to evaluate the Netflix Premium plan versus Disney+ for the office lounge. The sentiment seems mixed about the recent price hikes."
-
-Test Scenario 3 (Mixed):
-"Had a call with Microsoft support about the Azure OpenAI Service availability. It seems much better than the AWS Bedrock alternative right now."

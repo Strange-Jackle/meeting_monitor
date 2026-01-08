@@ -1,0 +1,507 @@
+"""
+Live Assistant Session - Real-time meeting analysis and hint generation.
+
+Orchestrates:
+1. Local screen/audio capture
+2. GPU-accelerated transcription  
+3. Gemini Vision analysis
+4. Quick Hints for overlay UI
+5. Final lead generation on session end
+"""
+
+import asyncio
+import time
+import os
+from dataclasses import dataclass, field
+from typing import Optional, Callable, List, Dict, Any
+from enum import Enum
+
+from app.modules.workflow.local_capture import (
+    LocalCaptureService, 
+    CaptureConfig, 
+    Screenshot, 
+    AudioChunk
+)
+from app.modules.transcription.service import TranscriptionService
+from app.modules.summarization.service import SummarizationService
+from app.modules.extraction.gliner_service import GLiNERService
+from app.modules.intelligence.gemini_service import GeminiService
+from app.modules.odoo_client.client import OdooClient
+
+
+class SessionStatus(Enum):
+    IDLE = "idle"
+    STARTING = "starting"
+    RUNNING = "running"
+    PROCESSING = "processing"  # End-of-session processing
+    COMPLETED = "completed"
+    ERROR = "error"
+
+
+@dataclass
+class SessionConfig:
+    """Configuration for live assistant session."""
+    # Analysis intervals
+    insight_interval: float = 5.0  # seconds between Gemini analysis
+    transcript_chunk_interval: float = 10.0  # seconds of audio per transcription
+    
+    # Capture settings
+    screen_interval: float = 2.0
+    
+    # Processing
+    enable_vision: bool = True
+    enable_transcription: bool = True
+    enable_final_sync: bool = True  # Push to Odoo on session end
+
+
+@dataclass
+class SessionState:
+    """Current state of a live session."""
+    status: SessionStatus = SessionStatus.IDLE
+    start_time: Optional[float] = None
+    
+    # Accumulated data
+    transcript_segments: List[str] = field(default_factory=list)
+    quick_hints: List[str] = field(default_factory=list)
+    detected_entities: List[str] = field(default_factory=list)
+    
+    # Stats
+    screenshots_processed: int = 0
+    audio_chunks_processed: int = 0
+    gemini_calls: int = 0
+    
+    @property
+    def full_transcript(self) -> str:
+        return " ".join(self.transcript_segments)
+    
+    @property
+    def duration(self) -> float:
+        if self.start_time:
+            return time.time() - self.start_time
+        return 0.0
+
+
+class LiveAssistantSession:
+    """
+    Manages a real-time meeting assistance session.
+    
+    Coordinates capture → transcription → analysis → hints pipeline.
+    """
+    
+    def __init__(self, config: Optional[SessionConfig] = None):
+        self.config = config or SessionConfig()
+        self.state = SessionState()
+        
+        # Services
+        self.capture_service: Optional[LocalCaptureService] = None
+        self.transcriber = TranscriptionService()
+        self.summarizer = SummarizationService()
+        self.extractor = GLiNERService()
+        self.gemini = GeminiService()
+        self.odoo = OdooClient()
+        
+        # Tasks
+        self._insight_task: Optional[asyncio.Task] = None
+        self._transcription_task: Optional[asyncio.Task] = None
+        
+        # Callbacks
+        self._on_hints_update: Optional[Callable[[List[str]], None]] = None
+        self._on_transcript_update: Optional[Callable[[str], None]] = None
+        self._on_status_change: Optional[Callable[[SessionStatus], None]] = None
+        self._on_entities_update: Optional[Callable[[List[str]], None]] = None
+        
+        print("[LiveSession] Session initialized")
+    
+    def set_callbacks(
+        self,
+        on_hints_update: Optional[Callable[[List[str]], None]] = None,
+        on_transcript_update: Optional[Callable[[str], None]] = None,
+        on_status_change: Optional[Callable[[SessionStatus], None]] = None,
+        on_entities_update: Optional[Callable[[List[str]], None]] = None
+    ):
+        """Set callbacks for real-time updates."""
+        self._on_hints_update = on_hints_update
+        self._on_transcript_update = on_transcript_update
+        self._on_status_change = on_status_change
+        self._on_entities_update = on_entities_update
+    
+    def _set_status(self, status: SessionStatus):
+        """Update status and notify callback."""
+        self.state.status = status
+        if self._on_status_change:
+            self._on_status_change(status)
+        print(f"[LiveSession] Status: {status.value}")
+    
+    async def start(self):
+        """Start the live assistant session."""
+        if self.state.status == SessionStatus.RUNNING:
+            print("[LiveSession] Already running")
+            return
+        
+        self._set_status(SessionStatus.STARTING)
+        self.state.start_time = time.time()
+        
+        try:
+            # Initialize capture service
+            capture_config = CaptureConfig(
+                screen_interval=self.config.screen_interval,
+                audio_chunk_duration=self.config.transcript_chunk_interval
+            )
+            self.capture_service = LocalCaptureService(capture_config)
+            
+            # Set capture callbacks
+            self.capture_service.set_callbacks(
+                on_audio_chunk=self._handle_audio_chunk
+            )
+            
+            # Start capture
+            await self.capture_service.start()
+            
+            # Start insight loop
+            if self.config.enable_vision:
+                self._insight_task = asyncio.create_task(self._insight_loop())
+            
+            self._set_status(SessionStatus.RUNNING)
+            print("[LiveSession] Session started")
+            
+        except Exception as e:
+            print(f"[LiveSession] Start error: {e}")
+            import traceback
+            traceback.print_exc()
+            self._set_status(SessionStatus.ERROR)
+            raise
+    
+    async def stop(self) -> Dict[str, Any]:
+        """
+        Stop the session and finalize.
+        
+        Returns:
+            Final session results including lead data if sync enabled.
+        """
+        if self.state.status not in [SessionStatus.RUNNING, SessionStatus.STARTING]:
+            return {"error": "Session not running"}
+        
+        self._set_status(SessionStatus.PROCESSING)
+        
+        # Stop insight loop with timeout
+        if self._insight_task:
+            self._insight_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._insight_task), 
+                    timeout=2.0
+                )
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        # Stop capture with timeout
+        if self.capture_service:
+            try:
+                await asyncio.wait_for(
+                    self.capture_service.stop(),
+                    timeout=3.0
+                )
+            except asyncio.TimeoutError:
+                print("[LiveSession] Capture stop timed out, forcing...")
+                self.capture_service._running = False
+        
+        # Finalize
+        result = {
+            "duration": self.state.duration,
+            "transcript": self.state.full_transcript,
+            "entities": self.state.detected_entities,
+            "stats": {
+                "screenshots_processed": self.state.screenshots_processed,
+                "audio_chunks_processed": self.state.audio_chunks_processed,
+                "gemini_calls": self.state.gemini_calls
+            }
+        }
+        
+        # Skip Odoo sync for now (can be done later to avoid timeout)
+        # TODO: Implement async background sync if needed
+        if self.config.enable_final_sync and self.state.full_transcript:
+            result["lead"] = {"status": "skipped", "message": "Sync disabled for speed"}
+        
+        self._set_status(SessionStatus.COMPLETED)
+        print(f"[LiveSession] Session completed. Duration: {self.state.duration:.1f}s")
+        
+        return result
+    
+    def _handle_audio_chunk(self, chunk: AudioChunk):
+        """Handle incoming audio chunk - queue it for transcription."""
+        if not self.config.enable_transcription:
+            return
+        
+        # Run transcription in a separate thread to avoid blocking audio capture
+        import threading
+        import re
+        import numpy as np
+        
+        def is_hallucination(text: str) -> bool:
+            """Detect Whisper hallucinations from silent audio."""
+            if not text or len(text) < 3:
+                return True
+            
+            # Check for repeated single characters (!!!!!!, ......, etc.)
+            if re.match(r'^(.)\1{5,}$', text.strip()):
+                return True
+            
+            # Check for mostly non-alphanumeric (!!!!, ????, etc.)
+            alphanumeric = sum(c.isalnum() or c.isspace() for c in text)
+            if alphanumeric < len(text) * 0.5:
+                return True
+            
+            # Check for common hallucination phrases
+            hallucination_phrases = [
+                "thank you for watching",
+                "thanks for watching",
+                "please subscribe",
+                "like and subscribe",
+                "see you next time",
+                "goodbye",
+                "music",
+                "[music]",
+                "(music)",
+            ]
+            text_lower = text.lower().strip()
+            if any(phrase in text_lower for phrase in hallucination_phrases):
+                return True
+            
+            # Check minimum word count
+            words = text.split()
+            if len(words) < 2:
+                return True
+            
+            return False
+        
+        def is_silent_audio(audio_data: np.ndarray) -> bool:
+            """Check if audio is mostly silent."""
+            rms = np.sqrt(np.mean(audio_data ** 2))
+            return rms < 0.01  # Very low amplitude threshold
+        
+        def transcribe_in_background():
+            try:
+                # Check for silence before transcribing
+                if is_silent_audio(chunk.data):
+                    print("[LiveSession] Skipping silent audio chunk")
+                    return
+                
+                # Save chunk to temp file
+                wav_path = LocalCaptureService.audio_chunk_to_wav_file(chunk)
+                
+                # Transcribe (this is the slow part)
+                text = self.transcriber.transcribe(wav_path)
+                
+                # Clean up temp file
+                try:
+                    os.remove(wav_path)
+                except:
+                    pass
+                
+                # Filter out hallucinations
+                if text and text.strip() and not is_hallucination(text):
+                    self.state.transcript_segments.append(text.strip())
+                    self.state.audio_chunks_processed += 1
+                    
+                    print(f"[LiveSession] Transcript: {text[:50]}...")
+                    
+                    if self._on_transcript_update:
+                        self._on_transcript_update(text)
+                elif text:
+                    print(f"[LiveSession] Filtered hallucination: {text[:30]}...")
+                
+            except Exception as e:
+                print(f"[LiveSession] Transcription error: {e}")
+        
+        # Start transcription in background thread
+        thread = threading.Thread(target=transcribe_in_background, daemon=True)
+        thread.start()
+    
+    async def _insight_loop(self):
+        """Periodic loop for Gemini vision analysis."""
+        print(f"[LiveSession] Insight loop started (interval: {self.config.insight_interval}s)")
+        
+        while self.state.status == SessionStatus.RUNNING:
+            try:
+                await asyncio.sleep(self.config.insight_interval)
+                
+                # Get latest screenshot
+                screenshot = self.capture_service.get_latest_screenshot()
+                if not screenshot:
+                    continue
+                
+                # Get current transcript context
+                transcript_context = self.state.full_transcript
+                if not transcript_context:
+                    transcript_context = "(No transcript yet)"
+                
+                # Convert screenshot to base64
+                screenshot_b64 = LocalCaptureService.screenshot_to_base64(screenshot)
+                
+                # Call Gemini Vision
+                result = await self.gemini.get_vision_insights(
+                    screenshot_base64=screenshot_b64,
+                    transcript_context=transcript_context
+                )
+                
+                self.state.gemini_calls += 1
+                self.state.screenshots_processed += 1
+                
+                # Update hints
+                if result.get("quick_hints"):
+                    self.state.quick_hints = result["quick_hints"]
+                    if self._on_hints_update:
+                        self._on_hints_update(result["quick_hints"])
+                    print(f"[LiveSession] Hints: {result['quick_hints']}")
+                
+                # Update entities
+                new_entities = result.get("detected_entities", [])
+                for entity in new_entities:
+                    if entity and entity not in self.state.detected_entities:
+                        self.state.detected_entities.append(entity)
+                
+                # Always notify if we have entities (not just new ones)
+                if self.state.detected_entities and self._on_entities_update:
+                    self._on_entities_update(self.state.detected_entities)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"[LiveSession] Insight error: {e}")
+                await asyncio.sleep(1.0)
+        
+        print("[LiveSession] Insight loop ended")
+    
+    async def _finalize_lead(self) -> Dict[str, Any]:
+        """
+        Finalize session and create Odoo lead.
+        
+        Returns lead creation result.
+        """
+        transcript = self.state.full_transcript
+        if not transcript:
+            return {"error": "No transcript to process"}
+        
+        print("[LiveSession] Finalizing lead...")
+        
+        # 1. Summarize
+        summary = self.summarizer.summarize(transcript)
+        print(f"[LiveSession] Summary: {summary[:100]}...")
+        
+        # 2. Extract entities
+        entities = self.extractor.extract(transcript)
+        print(f"[LiveSession] Extracted {len(entities)} entities")
+        
+        # 3. Build lead candidate
+        lead_name = "Meeting Lead"
+        lead_email = None
+        lead_phone = None
+        lead_company = None
+        
+        for entity in entities:
+            if entity.label == "person" and lead_name == "Meeting Lead":
+                lead_name = entity.text
+            elif entity.label == "email" and not lead_email:
+                lead_email = entity.text
+            elif entity.label == "phone number" and not lead_phone:
+                lead_phone = entity.text
+            elif entity.label == "organization" and not lead_company:
+                lead_company = entity.text
+        
+        # 4. Create Odoo lead
+        lead_result = self.odoo.create_lead({
+            "name": lead_name,
+            "email": lead_email,
+            "phone": lead_phone,
+            "company": lead_company,
+            "notes": summary,
+            "source": "Stealth Assistant",
+            "raw_transcript": transcript[:5000]  # Limit size
+        })
+        
+        return {
+            "lead_id": lead_result.get("id"),
+            "lead_name": lead_name,
+            "summary": summary,
+            "entities_count": len(entities)
+        }
+    
+    # ==================== STATUS ACCESSORS ====================
+    
+    @property
+    def is_running(self) -> bool:
+        return self.state.status == SessionStatus.RUNNING
+    
+    @property
+    def current_hints(self) -> List[str]:
+        return self.state.quick_hints
+    
+    @property
+    def current_transcript(self) -> str:
+        return self.state.full_transcript
+
+
+# Global session instance for API access
+_active_session: Optional[LiveAssistantSession] = None
+
+
+def get_active_session() -> Optional[LiveAssistantSession]:
+    """Get the current active session, if any."""
+    global _active_session
+    return _active_session
+
+async def start_new_session(config: Optional[SessionConfig] = None) -> LiveAssistantSession:
+    """Start a new session (stops any existing one)."""
+    global _active_session
+    
+    # Stop existing session if running
+    if _active_session:
+        if _active_session.is_running:
+            try:
+                await _active_session.stop()
+            except Exception as e:
+                print(f"[LiveSession] Error stopping previous session: {e}")
+        # Always reset the session reference
+        _active_session = None
+    
+    # Create and start new session
+    _active_session = LiveAssistantSession(config)
+    await _active_session.start()
+    
+    return _active_session
+
+
+async def stop_current_session() -> Optional[Dict[str, Any]]:
+    """Stop the current session and return results."""
+    global _active_session
+    
+    if not _active_session:
+        return None
+    
+    session = _active_session
+    
+    # Clear global reference immediately (allows new sessions to start)
+    _active_session = None
+    
+    if session.is_running or session.state.status == SessionStatus.STARTING:
+        try:
+            result = await session.stop()
+            return result
+        except Exception as e:
+            print(f"[LiveSession] Error stopping session: {e}")
+            return {"error": str(e)}
+    
+    return {"status": "not_running"}
+
+
+def force_reset_session():
+    """Force reset the session state (for error recovery)."""
+    global _active_session
+    if _active_session:
+        try:
+            if _active_session.capture_service:
+                _active_session.capture_service._running = False
+        except:
+            pass
+    _active_session = None
+    print("[LiveSession] Session force reset")

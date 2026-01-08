@@ -11,3 +11,34 @@ faster-whisper
 transformers
 torch
 torchaudio
+
+# WebSocket and HTTP
+websockets
+aiohttp
+
+# Browser Testing
+playwright
+
+# Sentiment Analysis (for web insight service)
+duckduckgo-search
+vaderSentiment
+
+# Gemini AI
+google-generativeai
+
+# Async utilities
+nest-asyncio
+
+# Stealth Assistant - Screen Capture
+mss
+Pillow
+
+# Stealth Assistant - Audio Capture (WASAPI Loopback)
+sounddevice
+soundfile
+numpy
+
+# Stealth Assistant - Overlay UI
+PyQt6
+pywin32
+websocket-client
