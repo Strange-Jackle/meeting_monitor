@@ -334,6 +334,104 @@
             color: #94a3b8;
             font-style: italic;
         }
+
+        /* Live Meeting Styles */
+        .live-meeting-section {
+            display: none;
+        }
+
+        .meeting-url-input {
+            width: 100%;
+            padding: 1rem;
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            color: var(--text);
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+        }
+
+        .meeting-url-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .meeting-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #94a3b8;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.active {
+            background: #22c55e;
+        }
+
+        .status-dot.error {
+            background: #ef4444;
+            animation: none;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .live-transcript {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .transcript-line {
+            margin-bottom: 0.5rem;
+            padding: 0.25rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .transcript-speaker {
+            color: #818cf8;
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+
+        .transcript-time {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            float: right;
+        }
+
+        .transcript-placeholder {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2rem;
+            font-style: italic;
+        }
     </style>
 </head>
 
@@ -349,7 +447,10 @@
                     style="float: none; margin-right: 1rem; background: transparent; border-bottom: 2px solid var(--primary);">Text
                     Summary</button>
                 <button id="tabAudio" onclick="switchTab('audio')"
-                    style="float: none; background: transparent; color: var(--text-muted);">Audio Upload</button>
+                    style="float: none; margin-right: 1rem; background: transparent; color: var(--text-muted);">Audio
+                    Upload</button>
+                <button id="tabLive" onclick="switchTab('live')"
+                    style="float: none; background: transparent; color: var(--text-muted);">🔴 Live Meeting</button>
             </div>
 
             <!-- Text Input -->
@@ -365,6 +466,24 @@
                 <button onclick="document.getElementById('audioInput').click()"
                     style="float: none; margin-bottom: 1rem;">Select Audio File</button>
                 <p id="fileName" style="color: var(--text-muted); margin-top: 0.5rem;">No file selected</p>
+            </div>
+
+            <!-- Live Meeting Input -->
+            <div id="sectionLive" class="live-meeting-section">
+                <input type="text" id="meetingUrl" class="meeting-url-input"
+                    placeholder="Paste Google Meet URL (e.g., https://meet.google.com/xxx-xxxx-xxx)">
+
+                <div id="meetingStatus" class="meeting-status" style="display: none;">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Ready to join...</span>
+                </div>
+
+                <div id="liveTranscriptContainer" style="display: none;">
+                    <h4>Live Transcript</h4>
+                    <div id="liveTranscript" class="live-transcript">
+                        <div class="transcript-placeholder">Waiting for meeting to start...</div>
+                    </div>
+                </div>
             </div>
 
             <button id="processBtn" onclick="processData()">Process</button>
@@ -404,28 +523,43 @@
 
     <script>
         let currentMode = 'text';
+        let meetingWebSocket = null;
 
         function switchTab(mode) {
             currentMode = mode;
             const tabText = document.getElementById('tabText');
             const tabAudio = document.getElementById('tabAudio');
+            const tabLive = document.getElementById('tabLive');
             const secText = document.getElementById('sectionText');
             const secAudio = document.getElementById('sectionAudio');
+            const secLive = document.getElementById('sectionLive');
+            const processBtn = document.getElementById('processBtn');
 
+            // Reset all tabs
+            [tabText, tabAudio, tabLive].forEach(tab => {
+                tab.style.borderBottom = 'none';
+                tab.style.color = 'var(--text-muted)';
+            });
+            [secText, secAudio, secLive].forEach(sec => {
+                sec.style.display = 'none';
+            });
+
+            // Activate selected tab
             if (mode === 'text') {
                 tabText.style.borderBottom = '2px solid var(--primary)';
                 tabText.style.color = 'var(--text)';
-                tabAudio.style.borderBottom = 'none';
-                tabAudio.style.color = 'var(--text-muted)';
                 secText.style.display = 'block';
-                secAudio.style.display = 'none';
-            } else {
+                processBtn.innerText = 'Process';
+            } else if (mode === 'audio') {
                 tabAudio.style.borderBottom = '2px solid var(--primary)';
                 tabAudio.style.color = 'var(--text)';
-                tabText.style.borderBottom = 'none';
-                tabText.style.color = 'var(--text-muted)';
                 secAudio.style.display = 'block';
-                secText.style.display = 'none';
+                processBtn.innerText = 'Process';
+            } else if (mode === 'live') {
+                tabLive.style.borderBottom = '2px solid var(--primary)';
+                tabLive.style.color = 'var(--text)';
+                secLive.style.display = 'block';
+                processBtn.innerText = 'Join & Monitor';
             }
         }
 
@@ -460,6 +594,12 @@
             const list = document.getElementById('insightsList');
             list.innerHTML = '';
             sidebar.classList.remove('open');
+
+            // Handle Live Meeting mode
+            if (currentMode === 'live') {
+                await processLiveMeeting();
+                return;
+            }
 
             try {
                 let response;
@@ -499,6 +639,115 @@
             } finally {
                 btn.disabled = false;
                 btn.innerText = "Process";
+            }
+        }
+
+        async function processLiveMeeting() {
+            const btn = document.getElementById('processBtn');
+            const meetingUrl = document.getElementById('meetingUrl').value.trim();
+
+            if (!meetingUrl) {
+                alert("Please enter a meeting URL.");
+                btn.disabled = false;
+                btn.innerText = 'Join & Monitor';
+                return;
+            }
+
+            // Show status UI
+            const statusDiv = document.getElementById('meetingStatus');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const transcriptContainer = document.getElementById('liveTranscriptContainer');
+            const transcriptDiv = document.getElementById('liveTranscript');
+
+            statusDiv.style.display = 'flex';
+            transcriptContainer.style.display = 'block';
+            transcriptDiv.innerHTML = '<div class="transcript-placeholder">Connecting to meeting...</div>';
+            statusText.innerText = 'Initiating bot...';
+            btn.innerText = 'Joining...';
+
+            try {
+                // 1. Start the meeting session
+                const response = await fetch('/api/v1/process-meeting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ meeting_url: meetingUrl })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start meeting');
+                }
+
+                const sessionData = await response.json();
+                const sessionId = sessionData.session_id;
+                statusText.innerText = `Session created: ${sessionData.native_id}`;
+
+                // 2. Connect via WebSocket
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/meeting-stream/${sessionId}`;
+
+                meetingWebSocket = new WebSocket(wsUrl);
+
+                meetingWebSocket.onopen = () => {
+                    statusText.innerText = 'Connected! Waiting for bot to join...';
+                    statusDot.classList.add('active');
+                    transcriptDiv.innerHTML = '';
+                };
+
+                meetingWebSocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    handleMeetingMessage(data, transcriptDiv, statusText, statusDot);
+                };
+
+                meetingWebSocket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    statusText.innerText = 'Connection error';
+                    statusDot.classList.remove('active');
+                    statusDot.classList.add('error');
+                };
+
+                meetingWebSocket.onclose = () => {
+                    btn.disabled = false;
+                    btn.innerText = 'Join & Monitor';
+                    if (!statusDot.classList.contains('error')) {
+                        statusText.innerText = 'Meeting ended';
+                    }
+                };
+
+            } catch (error) {
+                console.error('Meeting error:', error);
+                statusText.innerText = `Error: ${error.message}`;
+                statusDot.classList.add('error');
+                btn.disabled = false;
+                btn.innerText = 'Join & Monitor';
+            }
+        }
+
+        function handleMeetingMessage(data, transcriptDiv, statusText, statusDot) {
+            if (data.type === 'status') {
+                statusText.innerText = data.message || data.status;
+                if (data.status === 'active') {
+                    statusDot.classList.add('active');
+                }
+            } else if (data.type === 'transcript') {
+                const segment = data.segment;
+                const line = document.createElement('div');
+                line.className = 'transcript-line';
+                line.innerHTML = `
+                    <span class="transcript-speaker">${segment.speaker || 'Unknown'}:</span>
+                    <span>${segment.text}</span>
+                `;
+                transcriptDiv.appendChild(line);
+                transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+            } else if (data.type === 'result') {
+                // Final result - show in main results area
+                statusText.innerText = 'Meeting processed! See results below.';
+                renderResults(data.data);
+            } else if (data.type === 'error') {
+                statusText.innerText = `Error: ${data.message}`;
+                statusDot.classList.remove('active');
+                statusDot.classList.add('error');
             }
         }
 

@@ -1,15 +1,16 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, AsyncGenerator, Callable
 from app.modules.core.domain import SalesSummary, LeadCandidate, ExtractedEntity
 from app.modules.extraction.gliner_service import GLiNERService
 from app.modules.odoo_client.client import OdooClient
 from app.modules.transcription.service import TranscriptionService
 from app.modules.summarization.service import SummarizationService
 from app.modules.intelligence.gemini_service import GeminiService
-from app.modules.intelligence.web_insight_service import WebInsightService # New import
+from app.modules.intelligence.web_insight_service import WebInsightService
+# Note: Vexa bot service removed - now using local capture (live_session.py)
 import shutil
 import os
 import asyncio
-import traceback # New import
+import traceback
 
 import nest_asyncio
 nest_asyncio.apply()
@@ -24,6 +25,7 @@ class LeadWorkflowProcessor:
         self.summarizer = SummarizationService()
         # Use Web Insight Service (DuckDuckGo + VADER) - No API Key needed
         self.insights_service = WebInsightService()
+        # Note: Live meeting monitoring now handled by live_session.py
 
     async def process_summary_to_lead(self, summary_content: str) -> Dict[str, Any]:
         """
@@ -155,3 +157,12 @@ class LeadWorkflowProcessor:
             candidate.name = f"Contact at {candidate.company}"
 
         return candidate
+    
+    # ==================== DEPRECATED ====================
+    # The process_live_meeting method has been removed.
+    # Live meeting monitoring is now handled by:
+    #   - app/modules/workflow/live_session.py (LiveAssistantSession)
+    #   - app/modules/workflow/local_capture.py (LocalCaptureService)
+    # 
+    # Use the /start-session and /stop-session API endpoints instead.
+    # =====================================================
