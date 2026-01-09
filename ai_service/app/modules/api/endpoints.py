@@ -103,6 +103,7 @@ class SessionConfigRequest(BaseModel):
     enable_vision: bool = True
     enable_transcription: bool = True
     enable_final_sync: bool = True
+    capture_mode: str = "local"  # "local" or "remote"
 
 
 @router.post("/start-session")
@@ -121,7 +122,8 @@ async def start_session(config: Optional[SessionConfigRequest] = None):
                 screen_interval=config.screen_interval,
                 enable_vision=config.enable_vision,
                 enable_transcription=config.enable_transcription,
-                enable_final_sync=config.enable_final_sync
+                enable_final_sync=config.enable_final_sync,
+                capture_mode=config.capture_mode  # "local" or "remote"
             )
         
         # Start session
@@ -168,11 +170,21 @@ async def start_session(config: Optional[SessionConfigRequest] = None):
             except Exception as e:
                 print(f"[API] Broadcast entities error: {e}")
         
+        def broadcast_battlecard(battlecard):
+            try:
+                asyncio.run_coroutine_threadsafe(_broadcast({
+                    "type": "battlecard",
+                    "battlecard": battlecard
+                }), loop)
+            except Exception as e:
+                print(f"[API] Broadcast battlecard error: {e}")
+        
         session.set_callbacks(
             on_hints_update=broadcast_hints,
             on_transcript_update=broadcast_transcript,
             on_status_change=broadcast_status,
-            on_entities_update=broadcast_entities
+            on_entities_update=broadcast_entities,
+            on_battlecard=broadcast_battlecard
         )
         
         return {
@@ -425,3 +437,81 @@ async def _broadcast(message: dict):
     # Clean up disconnected clients
     for ws in disconnected:
         session_websockets.discard(ws)
+
+
+@router.websocket("/audio-stream")
+async def audio_stream(websocket: WebSocket):
+    """
+    WebSocket endpoint for receiving audio from remote clients.
+    
+    Clients capture audio locally and stream WAV data here.
+    The backend transcribes and processes it.
+    """
+    await websocket.accept()
+    print("[API] Audio stream client connected")
+    
+    try:
+        import tempfile
+        import os
+        
+        while True:
+            try:
+                # Receive binary WAV data
+                data = await websocket.receive_bytes()
+                
+                if not data:
+                    continue
+                
+                print(f"[API] Received audio chunk: {len(data)} bytes")
+                
+                # Save to temp file
+                fd, wav_path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                
+                try:
+                    with open(wav_path, 'wb') as f:
+                        f.write(data)
+                    
+                    # Get active session and process audio
+                    session = get_active_session()
+                    if session:
+                        # Use the transcriber to process
+                        segments = session.transcriber.transcribe_with_speakers(wav_path)
+                        
+                        if segments:
+                            # Add to session state
+                            session.state.transcript_segments.extend(segments)
+                            session.state.audio_chunks_processed += 1
+                            
+                            # Format and broadcast
+                            formatted = session.transcriber.format_transcript_with_speakers(segments)
+                            if session._on_transcript_update:
+                                session._on_transcript_update(formatted)
+                            
+                            print(f"[API] Transcribed: {formatted[:50]}...")
+                        else:
+                            print("[API] No speech detected in audio chunk")
+                    else:
+                        print("[API] No active session for audio")
+                        
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(wav_path):
+                        try:
+                            os.remove(wav_path)
+                        except:
+                            pass
+                
+            except WebSocketDisconnect:
+                print("[API] Audio stream client disconnected")
+                break
+            except Exception as e:
+                print(f"[API] Audio stream error: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+                
+    except Exception as e:
+        print(f"[API] Audio stream connection error: {e}")
+    finally:
+        print("[API] Audio stream client removed")

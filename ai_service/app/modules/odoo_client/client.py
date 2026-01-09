@@ -28,9 +28,16 @@ class OdooClient(LeadRepository):
                 print(f"Failed to connect to Odoo: {e}")
                 raise e
 
-    def create_lead(self, lead: LeadCandidate) -> int:
+    def create_lead(self, lead: LeadCandidate, starred_hints: Optional[list] = None) -> int:
         if not self.uid:
             self.connect()
+
+        description = f"{lead.notes}\n\nSource Summary: {lead.source_summary}"
+        
+        # Append Starred Hints if any
+        if starred_hints:
+            hints_text = "\n".join([f"- ⭐ {hint}" for hint in starred_hints])
+            description += f"\n\n=== STARRED HINTS ===\n{hints_text}"
 
         vals = {
             'name': f"Lead: {lead.name}",
@@ -38,7 +45,7 @@ class OdooClient(LeadRepository):
             'email_from': lead.email or "",
             'phone': lead.phone or "",
             'partner_name': lead.company or "",
-            'description': f"{lead.notes}\n\nSource Summary: {lead.source_summary}"
+            'description': description
         }
 
         try:

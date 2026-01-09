@@ -24,6 +24,174 @@ from PyQt6.QtGui import QFont, QColor, QPalette
 WDA_NONE = 0x00000000
 WDA_EXCLUDEFROMCAPTURE = 0x00000011  # Windows 10 2004+ (Build 19041+)
 
+# Audio capture imports
+import threading
+import time
+import io
+import wave
+import numpy as np
+import sounddevice as sd
+
+
+class ClientAudioCapture:
+    """
+    Client-side audio capture for distributed deployment.
+    Captures audio from local Stereo Mix and streams to backend.
+    """
+    
+    def __init__(self, api_base_url: str, chunk_duration: float = 10.0):
+        self.api_base_url = api_base_url
+        self.chunk_duration = chunk_duration
+        self._running = False
+        self._audio_thread = None
+        self._audio_buffer = []
+        self._buffer_start_time = 0
+        self._sample_rate = 16000
+        self._ws = None
+        
+    def _get_loopback_device(self):
+        """Find Stereo Mix or loopback device."""
+        try:
+            devices = sd.query_devices()
+            
+            # Priority: Stereo Mix
+            for i, device in enumerate(devices):
+                name = device['name'].lower()
+                if 'stereo mix' in name and device['max_input_channels'] > 0:
+                    rate = int(device['default_samplerate'])
+                    print(f"[ClientAudio] Found Stereo Mix: {device['name']} ({rate}Hz)")
+                    return (i, rate)
+            
+            # Fallback: Default input
+            default = sd.query_devices(kind='input')
+            rate = int(default['default_samplerate'])
+            print(f"[ClientAudio] Using default input: {default['name']} ({rate}Hz)")
+            return (None, rate)
+            
+        except Exception as e:
+            print(f"[ClientAudio] Device error: {e}")
+            return (None, 44100)
+    
+    def start(self):
+        """Start audio capture and streaming."""
+        if self._running:
+            return
+        
+        self._running = True
+        self._audio_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._audio_thread.start()
+        print("[ClientAudio] Started")
+    
+    def stop(self):
+        """Stop audio capture."""
+        self._running = False
+        if self._ws:
+            try:
+                self._ws.close()
+            except:
+                pass
+        print("[ClientAudio] Stopped")
+    
+    def _capture_loop(self):
+        """Main audio capture loop."""
+        import websocket
+        
+        # Connect to backend audio stream endpoint
+        ws_url = self.api_base_url.replace("http://", "ws://") + "/audio-stream"
+        
+        while self._running:
+            try:
+                print(f"[ClientAudio] Connecting to {ws_url}...")
+                self._ws = websocket.create_connection(ws_url, timeout=10)
+                print("[ClientAudio] Connected to backend")
+                
+                # Get audio device
+                device_id, native_rate = self._get_loopback_device()
+                self._sample_rate = native_rate
+                self._audio_buffer = []
+                self._buffer_start_time = time.time()
+                
+                def audio_callback(indata, frames, time_info, status):
+                    if status:
+                        print(f"[ClientAudio] Status: {status}")
+                    
+                    self._audio_buffer.append(indata.copy())
+                    
+                    # Check if we have enough for a chunk
+                    total_samples = sum(len(chunk) for chunk in self._audio_buffer)
+                    chunk_samples = int(self.chunk_duration * self._sample_rate)
+                    
+                    if total_samples >= chunk_samples:
+                        self._send_chunk()
+                
+                # Open audio stream
+                print(f"[ClientAudio] Opening stream at {native_rate}Hz...")
+                stream = sd.InputStream(
+                    device=device_id,
+                    samplerate=native_rate,
+                    channels=1,
+                    dtype=np.float32,
+                    callback=audio_callback,
+                    blocksize=1024
+                )
+                stream.start()
+                print("[ClientAudio] Audio stream active")
+                
+                # Keep alive while running
+                while self._running and stream.active:
+                    time.sleep(0.5)
+                    # Check WebSocket health
+                    try:
+                        self._ws.ping()
+                    except:
+                        print("[ClientAudio] WebSocket disconnected")
+                        break
+                
+                stream.stop()
+                stream.close()
+                
+            except Exception as e:
+                print(f"[ClientAudio] Error (retrying in 3s): {e}")
+                time.sleep(3)
+            
+            finally:
+                if self._ws:
+                    try:
+                        self._ws.close()
+                    except:
+                        pass
+                    self._ws = None
+    
+    def _send_chunk(self):
+        """Send accumulated audio to backend."""
+        if not self._audio_buffer or not self._ws:
+            return
+        
+        try:
+            # Concatenate audio
+            audio_data = np.concatenate(self._audio_buffer, axis=0)
+            
+            # Convert to WAV bytes
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(self._sample_rate)
+                # Convert float32 to int16
+                audio_int16 = (audio_data * 32767).astype(np.int16)
+                wf.writeframes(audio_int16.tobytes())
+            
+            # Send binary data
+            self._ws.send_binary(wav_buffer.getvalue())
+            print(f"[ClientAudio] Sent {len(audio_data)/self._sample_rate:.1f}s chunk")
+            
+        except Exception as e:
+            print(f"[ClientAudio] Send error: {e}")
+        
+        # Reset buffer
+        self._audio_buffer = []
+        self._buffer_start_time = time.time()
+
 
 class SignalBridge(QObject):
     """Bridge for thread-safe signal emission."""
@@ -31,8 +199,75 @@ class SignalBridge(QObject):
     transcript_updated = pyqtSignal(str)
     status_updated = pyqtSignal(str)
     entities_updated = pyqtSignal(list)
+    battlecard_received = pyqtSignal(dict)
 
 
+class BattlecardPanel(QFrame):
+    """
+    Panel for displaying competitive battlecards.
+    Pops up when a competitor is detected.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: rgba(60, 20, 20, 220);
+                border: 1px solid #E53935;
+                border-radius: 8px;
+            }
+        """)
+        self.setVisible(False)  # Hidden by default
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        
+        # Header
+        header = QHBoxLayout()
+        self.title = QLabel("⚔️ COMPETITOR DETECTED")
+        self.title.setStyleSheet("color: #FF5252; font-weight: bold; font-size: 13px;")
+        header.addWidget(self.title)
+        
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(20, 20)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton { color: #AAA; border: none; font-weight: bold; }
+            QPushButton:hover { color: white; }
+        """)
+        close_btn.clicked.connect(self.hide)
+        header.addWidget(close_btn)
+        layout.addLayout(header)
+        
+        # Competitor Name
+        self.competitor_label = QLabel("Competitor: ???")
+        self.competitor_label.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
+        layout.addWidget(self.competitor_label)
+        
+        # Quick Response
+        self.response_label = QLabel("Quick Response...")
+        self.response_label.setWordWrap(True)
+        self.response_label.setStyleSheet("color: #FFD700; font-style: italic; font-size: 13px; margin: 4px 0;")
+        layout.addWidget(self.response_label)
+        
+        # Counter Points
+        self.points_label = QLabel("• Point 1\n• Point 2\n• Point 3")
+        self.points_label.setWordWrap(True)
+        self.points_label.setStyleSheet("color: #EEE; font-size: 12px;")
+        layout.addWidget(self.points_label)
+    
+    def show_battlecard(self, data):
+        """Update and show the panel."""
+        self.competitor_label.setText(f"VS {data.get('competitor', 'Unknown')}")
+        self.response_label.setText(f"\"{data.get('quick_response', '')}\"")
+        
+        points = data.get("counter_points", [])
+        points_text = "\n".join([f"• {p}" for p in points])
+        self.points_label.setText(points_text)
+        
+        self.setVisible(True)
+
+    
 class StealthOverlay(QMainWindow):
     """
     Stealth overlay window for real-time sales assistance.
@@ -46,12 +281,16 @@ class StealthOverlay(QMainWindow):
         self._stealth_enabled = False
         self._is_recording = False
         
+        # Client-side audio capture for distributed deployment
+        self._audio_capture = None
+        
         # Signal bridge for thread-safe updates
         self.signals = SignalBridge()
         self.signals.hints_updated.connect(self._on_hints_updated)
         self.signals.transcript_updated.connect(self._on_transcript_updated)
         self.signals.status_updated.connect(self._on_status_updated)
         self.signals.entities_updated.connect(self._on_entities_updated)
+        self.signals.battlecard_received.connect(self._on_battlecard_received)
         
         self._setup_ui()
         self._setup_window()
@@ -108,6 +347,10 @@ class StealthOverlay(QMainWindow):
         # Hints panel
         self.hints_frame = self._create_hints_panel()
         layout.addWidget(self.hints_frame)
+
+        # Battlecard Panel (Hidden by default)
+        self.battlecard_panel = BattlecardPanel()
+        layout.addWidget(self.battlecard_panel)
         
         # Transcript panel
         self.transcript_panel = self._create_transcript_panel()
@@ -168,14 +411,31 @@ class StealthOverlay(QMainWindow):
         header.setStyleSheet("color: #FFD700; font-size: 12px; font-weight: bold;")
         layout.addWidget(header)
         
-        # Hint labels (3 slots)
-        self.hint_labels = []
+        # Hint buttons (3 slots)
+        self.hint_buttons = []
         for i in range(3):
-            label = QLabel(f"• Waiting for analysis...")
-            label.setStyleSheet("color: #CCC; font-size: 13px; padding-left: 8px;")
-            label.setWordWrap(True)
-            self.hint_labels.append(label)
-            layout.addWidget(label)
+            btn = QPushButton(f"• Waiting for analysis...")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    color: #CCC;
+                    font-size: 13px;
+                    text-align: left;
+                    border: none;
+                    padding: 4px;
+                    background: transparent;
+                }
+                QPushButton:hover {
+                    color: #FFD700;
+                    background-color: rgba(255, 255, 255, 20);
+                    border-radius: 4px;
+                }
+            """)
+            # Connect using closure to capture index/text
+            # Note: We'll attach the specific hint text dynamically later
+            btn.clicked.connect(lambda checked, b=btn: self._on_hint_clicked(b))
+            self.hint_buttons.append(btn)
+            layout.addWidget(btn)
         
         return frame
     
@@ -321,14 +581,93 @@ class StealthOverlay(QMainWindow):
         self.signals.hints_updated.emit(hints)
     
     def _on_hints_updated(self, hints: List[str]):
-        """Update hint labels."""
-        for i, label in enumerate(self.hint_labels):
+        """Update hint buttons."""
+        for i, btn in enumerate(self.hint_buttons):
             if i < len(hints):
-                label.setText(f"• {hints[i]}")
-                label.setStyleSheet("color: #FFF; font-size: 13px; padding-left: 8px;")
+                text = hints[i]
+                btn.setText(f"• {text}")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        color: #FFF;
+                        font-size: 13px;
+                        text-align: left;
+                        border: none;
+                        padding: 4px;
+                    }
+                    QPushButton:hover {
+                        color: #FFD700;
+                        background-color: rgba(255, 255, 255, 30);
+                        border-radius: 4px;
+                        font-weight: bold;
+                    }
+                """)
+                btn.setProperty("hint_text", text)
+                btn.setToolTip("Click to Star (Save to CRM)")
+                btn.setEnabled(True)
             else:
-                label.setText("• ...")
-                label.setStyleSheet("color: #666; font-size: 13px; padding-left: 8px;")
+                btn.setText("• ...")
+                btn.setStyleSheet("""
+                   QPushButton { 
+                        color: #666; 
+                        font-size: 13px; 
+                        text-align: left;
+                        border: none;
+                        padding: 4px;
+                   }
+                """)
+                btn.setEnabled(False)
+    
+    def _on_hint_clicked(self, btn):
+        """Handle click on hint button to star it."""
+        hint_text = btn.property("hint_text")
+        if not hint_text:
+            return
+            
+        print(f"[Overlay] Star clicked: {hint_text}")
+        
+        # Visual feedback
+        original_text = btn.text()
+        btn.setText(f"⭐ SAVED: {hint_text}")
+        btn.setStyleSheet("color: #4CAF50; font-weight: bold; border: none; padding: 4px;")
+        
+        # Revert visual feedback after 1.5s
+        QTimer.singleShot(1500, lambda: self._revert_hint_btn(btn, original_text))
+        
+        # Call API
+        self._star_hint_api(hint_text)
+        
+    def _revert_hint_btn(self, btn, text):
+        if btn.text().startswith("⭐"):
+            btn.setText(text)
+            btn.setStyleSheet("""
+                QPushButton {
+                    color: #FFF;
+                    font-size: 13px;
+                    text-align: left;
+                    border: none;
+                    padding: 4px;
+                }
+                QPushButton:hover {
+                    color: #FFD700;
+                    background-color: rgba(255, 255, 255, 30);
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+            """)
+
+    def _star_hint_api(self, hint_text):
+        """Call API to star the hint."""
+        import requests
+        import threading
+        def call():
+            try:
+                requests.post(
+                    f"{self.API_BASE_URL}/star-hint",
+                    json={"hint_text": hint_text}
+                )
+            except Exception as e:
+                print(f"[Overlay] Star API error: {e}")
+        threading.Thread(target=call, daemon=True).start()
     
     def update_transcript(self, text: str):
         """Thread-safe transcript update via signal."""
@@ -399,6 +738,17 @@ class StealthOverlay(QMainWindow):
         """Thread-safe entities update via signal."""
         self.signals.entities_updated.emit(entities)
     
+    def update_battlecard(self, battlecard: dict):
+        """Thread-safe battlecard update via signal."""
+        self.signals.battlecard_received.emit(battlecard)
+    
+    def _on_battlecard_received(self, battlecard: dict):
+        """Show battlecard panel."""
+        self.battlecard_panel.show_battlecard(battlecard)
+        
+        # Auto-hide after 30 seconds
+        QTimer.singleShot(30000, self.battlecard_panel.hide)
+    
     def _on_entities_updated(self, entities: List[str]):
         """Update entities label."""
         if entities:
@@ -436,13 +786,18 @@ class StealthOverlay(QMainWindow):
             try:
                 response = requests.post(
                     f"{self.API_BASE_URL}/start-session",
-                    json={},
+                    json={"capture_mode": "remote"},  # Tell backend we're sending audio remotely
                     timeout=30
                 )
                 if response.status_code == 200:
                     self._is_recording = True
                     self.update_status("running")
                     print(f"[Overlay] Session started: {response.json()}")
+                    
+                    # Start local audio capture and stream to backend
+                    self._audio_capture = ClientAudioCapture(self.API_BASE_URL)
+                    self._audio_capture.start()
+                    
                     # Start WebSocket connection for updates
                     self._connect_websocket()
                 else:
@@ -465,6 +820,11 @@ class StealthOverlay(QMainWindow):
         
         def call_api():
             try:
+                # Stop local audio capture first
+                if self._audio_capture:
+                    self._audio_capture.stop()
+                    self._audio_capture = None
+                
                 response = requests.post(
                     f"{self.API_BASE_URL}/stop-session",
                     timeout=60  # May take time to process
@@ -480,6 +840,9 @@ class StealthOverlay(QMainWindow):
             except Exception as e:
                 print(f"[Overlay] API error: {e}")
                 self._is_recording = False
+                if self._audio_capture:
+                    self._audio_capture.stop()
+                    self._audio_capture = None
                 self.update_status("idle")
         
         threading.Thread(target=call_api, daemon=True).start()
@@ -518,6 +881,8 @@ class StealthOverlay(QMainWindow):
                                     self.update_status(status)
                             elif msg_type == "entities":
                                 self.update_entities(data.get("entities", []))
+                            elif msg_type == "battlecard":
+                                self.update_battlecard(data.get("battlecard", {}))
                             elif msg_type == "ping":
                                 # Server keep-alive, ignore
                                 pass

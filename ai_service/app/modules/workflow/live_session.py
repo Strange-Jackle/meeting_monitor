@@ -47,6 +47,7 @@ class SessionConfig:
     
     # Capture settings
     screen_interval: float = 2.0
+    capture_mode: str = "local"  # "local" or "remote" (remote = client streams audio)
     
     # Processing
     enable_vision: bool = True
@@ -146,6 +147,7 @@ class LiveAssistantSession:
         self._on_transcript_update: Optional[Callable[[str], None]] = None
         self._on_status_change: Optional[Callable[[SessionStatus], None]] = None
         self._on_entities_update: Optional[Callable[[List[str]], None]] = None
+        self._on_battlecard: Optional[Callable[[Dict], None]] = None
         
         print("[LiveSession] Session initialized")
     
@@ -154,13 +156,15 @@ class LiveAssistantSession:
         on_hints_update: Optional[Callable[[List[str]], None]] = None,
         on_transcript_update: Optional[Callable[[str], None]] = None,
         on_status_change: Optional[Callable[[SessionStatus], None]] = None,
-        on_entities_update: Optional[Callable[[List[str]], None]] = None
+        on_entities_update: Optional[Callable[[List[str]], None]] = None,
+        on_battlecard: Optional[Callable[[Dict], None]] = None
     ):
         """Set callbacks for real-time updates."""
         self._on_hints_update = on_hints_update
         self._on_transcript_update = on_transcript_update
         self._on_status_change = on_status_change
         self._on_entities_update = on_entities_update
+        self._on_battlecard = on_battlecard
     
     def _set_status(self, status: SessionStatus):
         """Update status and notify callback."""
@@ -179,17 +183,22 @@ class LiveAssistantSession:
         self.state.start_time = time.time()
         
         try:
-            # Initialize capture service
+            # Initialize capture service (always needed for screen capture)
             capture_config = CaptureConfig(
                 screen_interval=self.config.screen_interval,
                 audio_chunk_duration=self.config.transcript_chunk_interval
             )
             self.capture_service = LocalCaptureService(capture_config)
             
-            # Set capture callbacks
-            self.capture_service.set_callbacks(
-                on_audio_chunk=self._handle_audio_chunk
-            )
+            # Set capture callbacks - ONLY register audio callback if NOT remote mode
+            if self.config.capture_mode == "local":
+                print("[LiveSession] Mode: LOCAL (capturing audio from this machine)")
+                self.capture_service.set_callbacks(
+                    on_audio_chunk=self._handle_audio_chunk
+                )
+            else:
+                print("[LiveSession] Mode: REMOTE (audio will be streamed from clients)")
+                # No audio callback - audio comes via /audio-stream WebSocket
             
             # Start capture
             await self.capture_service.start()
@@ -254,10 +263,14 @@ class LiveAssistantSession:
             }
         }
         
-        # Skip Odoo sync for now (can be done later to avoid timeout)
-        # TODO: Implement async background sync if needed
         if self.config.enable_final_sync and self.state.full_transcript:
-            result["lead"] = {"status": "skipped", "message": "Sync disabled for speed"}
+            # Run finalization (includes Odoo sync)
+            try:
+                lead_data = await self._finalize_lead()
+                result["lead"] = lead_data
+            except Exception as e:
+                print(f"[LiveSession] Finalization failed: {e}")
+                result["lead"] = {"error": str(e)}
         
         self._set_status(SessionStatus.COMPLETED)
         print(f"[LiveSession] Session completed. Duration: {self.state.duration:.1f}s")
@@ -363,6 +376,20 @@ class LiveAssistantSession:
                         if self._on_transcript_update:
                             formatted_text = self.transcriber.format_transcript_with_speakers(valid_segments)
                             self._on_transcript_update(formatted_text)
+                        
+                        # Placeholder for battlecard generation (assuming it happens here)
+                        # If a battlecard is generated based on the valid_segments,
+                        # it would be appended to self.state.battlecards and the callback triggered.
+                        # For example:
+                        # battlecard = self._generate_battlecard_from_segments(valid_segments)
+                        # if battlecard:
+                        #     self.state.battlecards.append(battlecard)
+                        #     if self._on_battlecard:
+                        #         self._on_battlecard(battlecard)
+                        
+                        # Re-broadcasting hints to keep UI fresh (if needed, though usually done in insight loop)
+                        if self._on_hints_update:
+                            self._on_hints_update(self.state.quick_hints)
                     else:
                         print("[LiveSession] All segments filtered as hallucinations")
                 
@@ -398,28 +425,23 @@ class LiveAssistantSession:
                 
                 # Call Gemini Vision
                 result = await self.gemini.get_vision_insights(
-                    screenshot_base64=screenshot_b64,
-                    transcript_context=transcript_context
+                    screenshot_b64,
+                    transcript_context,
+                    max_hints=3
                 )
                 
+                # Update state
+                self.state.quick_hints = result.get("quick_hints", [])
+                self.state.detected_entities = result.get("detected_entities", [])
                 self.state.gemini_calls += 1
-                self.state.screenshots_processed += 1
                 
-                # Update hints
-                if result.get("quick_hints"):
-                    self.state.quick_hints = result["quick_hints"]
-                    if self._on_hints_update:
-                        self._on_hints_update(result["quick_hints"])
-                    print(f"[LiveSession] Hints: {result['quick_hints']}")
+                print(f"[LiveSession] Insights: {len(self.state.quick_hints)} hints, {len(self.state.detected_entities)} entities")
                 
-                # Update entities
-                new_entities = result.get("detected_entities", [])
-                for entity in new_entities:
-                    if entity and entity not in self.state.detected_entities:
-                        self.state.detected_entities.append(entity)
+                # Notify UI
+                if self._on_hints_update:
+                    self._on_hints_update(self.state.quick_hints)
                 
-                # Always notify if we have entities (not just new ones)
-                if self.state.detected_entities and self._on_entities_update:
+                if self._on_entities_update:
                     self._on_entities_update(self.state.detected_entities)
                 
             except asyncio.CancelledError:
@@ -480,7 +502,8 @@ class LiveAssistantSession:
                     "notes": summary,
                     "source": "Stealth Assistant",
                     "raw_transcript": transcript[:5000]
-                }
+                },
+                self.state.starred_hints  # Pass starred hints
             )
         except Exception as e:
             print(f"[LiveSession] Odoo Sync Failed (Non-critical): {e}")
