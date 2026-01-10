@@ -1,133 +1,159 @@
 import asyncio
+import warnings
+# Suppress DDG rename warning before import
+warnings.filterwarnings("ignore", message=".*has been renamed.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 from duckduckgo_search import DDGS
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import logging
 import random
+try:
+    import trafilatura
+except ImportError:
+    trafilatura = None
 
 class WebInsightService:
     def __init__(self):
         self.analyzer = SentimentIntensityAnalyzer()
-        # DDGS instance moved to local scope in _search_ddg to avoid threading issues
 
-    async def get_entity_insights_async(self, entity_text: str, entity_type: str) -> dict:
+    async def get_negative_insights_stream(self, entity_text: str):
         """
-        Fetches insights by searching DuckDuckGo for recent Reddit/Twitter discussions
-        and analyzing sentiment locally with VADER.
+        Generator that streams insights:
+        1. Yields FAST snippets (T+1s)
+        2. Yields DEEP crawl data (T+2s+)
         """
-        print(f"Searching web for: {entity_text}...")
+        print(f"[Web] Starting Negative Deep Dive for: {entity_text}")
         
-        # 1. Construct Search Query (Simplified for better hits)
-        # Complex OR queries can fail in DDG API wrappers sometimes
-        query = f'{entity_text} review sentiment reddit twitter'
+        # T+0: Fire 3 Parallel Negative Queries (Optimized for English)
+        queries = [
+            f'"{entity_text}" problems complaints issues english',
+            f'"{entity_text}" cons downsides limitations english',
+            f'"{entity_text}" worst features reddit' 
+        ]
         
-        results = []
-        try:
-            # Run blocking DDG search in a separate thread
-            # max_results=5 is enough to get a pulse
-            results = await asyncio.to_thread(self._search_ddg, query)
-        except Exception as e:
-            logging.error(f"DDG Search failed for {entity_text}: {e}")
-            return None
-
-        if not results:
-            print(f"No web results found for {entity_text}")
-            return None
-
-        # 2. Analyze Sentiment Locally (VADER)
-        # Aggregate text from titles and snippets
-        full_text = " ".join([f"{r.get('title','')} {r.get('body','')}" for r in results])
-        scores = self.analyzer.polarity_scores(full_text)
-        compound_score = scores['compound']
+        # Run searches in parallel
+        tasks = [asyncio.to_thread(self._search_ddg, q) for q in queries]
+        results_lists = await asyncio.gather(*tasks)
         
-        # Determine Verdict
-        verdict = "Mixed"
-        if compound_score > 0.05:
-            verdict = "Positive"
-        elif compound_score < -0.05:
-            verdict = "Negative"
-
-        # 3. Generate Summary from Snippets
-        # Take the most relevant snippet or just the top one
-        top_snippet = results[0].get('body', results[0].get('title', ''))
-        if len(top_snippet) > 150:
-            top_snippet = top_snippet[:150] + "..."
+        # Flatten results
+        all_results = []
+        for r_list in results_lists:
+            all_results.extend(r_list)
             
-        summary = f"Recent discussions trend {verdict.lower()}. Top comment: \"{top_snippet}\""
+        if not all_results:
+            print(f"[Web] No results found for {entity_text}")
+            yield {"type": "fast", "data": None}
+            return
 
-        # 4. Extract Sources (Domains)
-        sources = set()
-        for r in results:
-            link = r.get('href', '')
-            if "reddit.com" in link:
-                sources.add("Reddit")
-            elif "twitter.com" in link or "x.com" in link:
-                sources.add("Twitter")
+        # T+1: FAST Analysis (VADER on snippets)
+        # ------------------------------------------------
+        # Filter for English-looking content (Latin Character Ratio)
+        def is_mostly_english(item):
+            text = (item.get('title', '') + " " + item.get('body', '')).strip()
+            if not text: return False
+            try:
+                # Count latin letters [a-zA-Z]
+                latin_count = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+                ratio = latin_count / len(text)
+                return ratio >= 0.5
+            except:
+                return True
+
+        # Blacklist unhelpful domains
+        BLACKLIST_DOMAINS = ["wikipedia.org", "login.", "signin.", "signup.", "facebook.com", "instagram.com"]
         
-        if not sources:
-            sources.add("Web")
+        def is_useful_source(url):
+            return not any(b in url for b in BLACKLIST_DOMAINS)
 
-        return {
-            "summary": summary,
-            "verdict": verdict,
-            "sources": list(sources)
+        unique_results = {r['href']: r for r in all_results 
+            if is_mostly_english(r) and is_useful_source(r['href'])
+        }.values()
+        top_results = list(unique_results)[:5]
+        
+        if not top_results:
+             print("[Web] No English results found after filter.")
+             yield {"type": "fast", "data": None}
+             return
+
+        snippet_text = " ".join([f"{r.get('title','')} {r.get('body','')}" for r in top_results])
+        scores = self.analyzer.polarity_scores(snippet_text)
+        
+        fast_insight = {
+            "summary": f"Initial scan of {len(all_results)} sources shows potential issues. Top Top complaint: '{top_results[0].get('body','')[:100]}...'",
+            "verdict": "Negative" if scores['compound'] < -0.05 else "Mixed",
+            "negative_score": round(scores['neg'] * 10, 1),
+            "sources": [r.get('href') for r in top_results[:3]]
         }
+        
+        yield {"type": "fast", "data": fast_insight}
+        
+        # T+2: DEEP Crawl (Trafilatura)
+        # ------------------------------------------------
+        if not trafilatura:
+            print("[Web] Trafilatura not installed, skipping deep crawl.")
+            return
+
+        print(f"[Web] Deep Crawling top {len(top_results[:2])} URLs...")
+        
+        crawl_tasks = [asyncio.to_thread(self._crawl_url, r['href']) for r in top_results[:2]]
+        crawled_texts = await asyncio.gather(*crawl_tasks)
+        
+        # Filter for purely negative content / facts
+        combined_text = "\n\n".join([t for t in crawled_texts if t]) # trafilatura already filtered by lang='en'
+        
+        # Simple extraction of "bad" keywords lines
+        negative_keywords = [
+            "slow", "expensive", "crash", "bug", "support", "fail", "hard", 
+            "complex", "limit", "hidden", "money", "cost", "price", "down", 
+            "error", "bad", "fix", "issue", "problem", "suck", "terrible"
+        ]
+        critical_points = []
+        
+        for line in combined_text.split('\n'):
+            if len(line) > 30 and any(k in line.lower() for k in negative_keywords):
+                critical_points.append(line.strip())
+        
+        # Select unique top 3 points
+        critical_points = list(set(critical_points))[:3]
+        
+        if critical_points:
+            deep_insight = {
+                "summary": "Deep analysis found specific complaints:\n• " + "\n• ".join(critical_points),
+                "verdict": "Confirmed Negative",
+                "evidence": critical_points,
+                "sources": [r.get('href') for r in top_results[:2]]
+            }
+            yield {"type": "deep", "data": deep_insight}
+        else:
+            print("[Web] Crawl yielded no specific negative points.")
 
     def _search_ddg(self, query):
-        """Helper to run the synchronous DDG generator"""
-        # Instantiate DDGS here for thread safety
-        with DDGS() as ddgs:
-            # ddgs.text() returns a generator, consume it to get a list
-            return list(ddgs.text(query, max_results=5))
-
-    async def get_detailed_insights_async(self, entity_text: str) -> dict:
-        """
-        Fetches deeper insights:
-        1. Recent News Headlines
-        2. Pros/Cons snapshot
-        """
-        print(f"Deep diving into: {entity_text}...")
-        
+        """Run DDG search safely (English preferred)"""
         try:
-            results = await asyncio.to_thread(self._search_details_ddg, entity_text)
-            return results
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with DDGS() as ddgs:
+                    # Fetch more results to allow for filtering
+                    return list(ddgs.text(query, max_results=10))
         except Exception as e:
-            logging.error(f"Detailed search failed: {e}")
-            return {"error": str(e)}
+            logging.error(f"DDG error for '{query}': {e}")
+            return []
 
-    def _search_details_ddg(self, entity):
-        """Helper for granular searches"""
-        news_items = []
-        pros_cons = []
-        
-        with DDGS() as ddgs:
-            # 1. News Search
-            # ddgs.news returns a generator
-            news_gen = ddgs.news(keywords=entity, max_results=3)
-            for r in news_gen:
-                news_items.append({
-                    "title": r.get('title'),
-                    "url": r.get('url'),
-                    "date": r.get('date'),
-                    "source": r.get('source')
-                })
-            
-            # 2. Pros/Cons Text Search
-            # We look for "reviews" or "pros cons" specifically
-            query = f"{entity} pros cons review summary"
-            text_gen = ddgs.text(query, max_results=3)
-            for r in text_gen:
-                # Simple extraction of body text
-                body = r.get('body', '')
-                if body:
-                    pros_cons.append(body)
-
-        return {
-            "news": news_items,
-            "analysis": pros_cons
-        }
+    def _crawl_url(self, url):
+        """Download and extract text from URL"""
+        try:
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                # Keep target_language='en' as it happens after fetch
+                return trafilatura.extract(downloaded, include_comments=False, favor_precision=True, target_language='en')
+        except Exception as e:
+            logging.error(f"Crawl error {url}: {e}")
+        return ""
 
 if __name__ == "__main__":
     async def test():
         s = WebInsightService()
-        print(await s.get_entity_insights_async("Cosmos DB", "service"))
+        async for update in s.get_negative_insights_stream("Datadog"):
+            print(f"\n--- {update['type'].upper()} UPDATE ---")
+            print(update['data'])
     asyncio.run(test())

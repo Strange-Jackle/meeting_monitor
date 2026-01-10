@@ -13,11 +13,12 @@ class GeminiService:
             try:
                 genai.configure(api_key=self.api_key)
                 self.model = genai.GenerativeModel(self.model_name)
-            except Exception:
-                print("Gemini API Key invalid or configuration failed. Using Mock mode.")
+                print(f"[Gemini] Initialized with model: {self.model_name}")
+            except Exception as e:
+                print(f"[Gemini] API Key invalid or configuration failed ({e}). Using Mock mode.")
                 self.model = None
         else:
-            print("Warning: GEMINI_API_KEY is not set. Using Mock Insights.")
+            print("[Gemini] Warning: GEMINI_API_KEY is not set. Using Mock Insights.")
             self.model = None
 
     # MOCK DATA STORE
@@ -237,6 +238,102 @@ GUIDELINES FOR HINTS:
                 "quick_hints": ["Focus on client needs"],
                 "detected_entities": [],
                 "meeting_context": "Analysis unavailable",
+                "sentiment": "neutral"
+            }
+
+    async def generate_sales_hints(
+        self,
+        transcript: str,
+        entities: list = None,
+        max_hints: int = 3
+    ) -> dict:
+        """
+        Generate smart sales hints from transcript using Gemini AI.
+        
+        Args:
+            transcript: Recent transcript text
+            entities: Optional list of entities already extracted
+            max_hints: Maximum number of hints to generate
+            
+        Returns:
+            {
+                "quick_hints": ["Hint 1", "Hint 2", "Hint 3"],
+                "detected_entities": [...],
+                "sentiment": "positive/neutral/negative"
+            }
+        """
+        if not self.model:
+            print("[Gemini] No model available, returning empty hints")
+            return {
+                "quick_hints": [],
+                "detected_entities": entities or [],
+                "sentiment": "neutral"
+            }
+        
+        # Format entities for prompt
+        entity_str = ""
+        if entities:
+            entity_str = f"\n\nEntities detected: {', '.join([str(e) for e in entities[:10]])}"
+        
+        prompt = f"""You are a real-time sales coach helping a salesperson during a live call.
+
+TRANSCRIPT (last 60 seconds):
+{transcript[-2000:]}
+{entity_str}
+
+Generate {max_hints} SHORT, ACTIONABLE hints the salesperson should see RIGHT NOW.
+
+RESPOND IN THIS EXACT JSON FORMAT:
+{{
+    "quick_hints": [
+        "Under 10 words - immediate action or talking point",
+        "Under 10 words - key insight or opportunity",
+        "Under 10 words - question to ask or objection to address"
+    ],
+    "sentiment": "positive" or "neutral" or "negative",
+    "key_topic": "The main topic being discussed",
+    "research_topics": ["Topic 1", "Topic 2"]
+}}
+
+RULES:
+- Hints must be ULTRA SHORT (under 10 words each)
+- Focus on WHAT TO SAY or DO next
+- Be specific to the conversation content
+- If unclear, suggest clarifying questions
+- research_topics: Identify 1-2 key entities, competitors, or concepts mentioned that are worth researching to enhance the pitch.
+"""
+        
+        try:
+            response = await self.model.generate_content_async(prompt)
+            text = response.text.strip()
+            
+            # Clean up JSON from markdown
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            
+            result = json.loads(text.strip())
+            
+            # Ensure required fields
+            if "quick_hints" not in result:
+                result["quick_hints"] = []
+            if "sentiment" not in result:
+                result["sentiment"] = "neutral"
+            
+            # Add entities to result
+            result["detected_entities"] = entities or []
+            
+            print(f"[Gemini] Generated {len(result['quick_hints'])} hints (sentiment: {result.get('sentiment', 'unknown')})")
+            return result
+            
+        except Exception as e:
+            print(f"[Gemini] Hint generation error: {e}")
+            return {
+                "quick_hints": [],
+                "detected_entities": entities or [],
                 "sentiment": "neutral"
             }
 

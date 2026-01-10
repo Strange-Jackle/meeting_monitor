@@ -50,3 +50,7 @@ numpy
 PyQt6
 pywin32
 websocket-client
+
+# Face Sentiment Analysis (CPU-only)
+deepface
+opencv-python>=4.8

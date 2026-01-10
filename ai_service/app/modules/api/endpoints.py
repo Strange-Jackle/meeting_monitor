@@ -179,12 +179,19 @@ async def start_session(config: Optional[SessionConfigRequest] = None):
             except Exception as e:
                 print(f"[API] Broadcast battlecard error: {e}")
         
+        def broadcast_face_sentiment(data):
+            try:
+                asyncio.run_coroutine_threadsafe(_broadcast(data), loop)
+            except Exception as e:
+                print(f"[API] Broadcast face sentiment error: {e}")
+        
         session.set_callbacks(
             on_hints_update=broadcast_hints,
             on_transcript_update=broadcast_transcript,
             on_status_change=broadcast_status,
             on_entities_update=broadcast_entities,
-            on_battlecard=broadcast_battlecard
+            on_battlecard=broadcast_battlecard,
+            on_face_sentiment=broadcast_face_sentiment
         )
         
         return {
@@ -305,21 +312,54 @@ async def get_battlecard(request: BattlecardRequest):
     """
     Generate a competitive battlecard for a competitor.
     
-    Returns 3 counter-points the salesman can use immediately.
+    Returns 3 counter-points the salesman can use immediately,
+    enhanced with web research for negative competitor analysis.
     """
     try:
         from app.modules.intelligence.gemini_service import GeminiService
+        from app.modules.intelligence.web_insight_service import WebInsightService
         
+        # 1. Generate battlecard with Gemini
         gemini = GeminiService()
         battlecard = await gemini.get_battlecard(
             competitor_name=request.competitor_name,
             context=request.context
         )
         
+        # 2. Get web insights for competitor (use existing service)
+        try:
+            web_service = WebInsightService()
+            web_insights = {"negative_findings": [], "sources": []}
+            
+            # Stream insights from web_insight_service
+            async for update in web_service.get_negative_insights_stream(request.competitor_name):
+                if update.get("type") == "fast" and update.get("data"):
+                    data = update["data"]
+                    web_insights["negative_findings"].append(data.get("summary", ""))
+                    web_insights["sources"] = data.get("sources", [])
+                    web_insights["verdict"] = data.get("verdict", "")
+                    web_insights["negative_score"] = data.get("negative_score", 0)
+                elif update.get("type") == "deep" and update.get("data"):
+                    data = update["data"]
+                    if data.get("evidence"):
+                        web_insights["negative_findings"].extend(data["evidence"])
+                    web_insights["verdict"] = data.get("verdict", web_insights.get("verdict", ""))
+            
+            battlecard["web_research"] = web_insights
+            print(f"[API] Web insight: {web_insights.get('verdict', 'N/A')} for {request.competitor_name}")
+            
+        except Exception as e:
+            print(f"[API] Web insight error: {e}")
+            battlecard["web_research"] = {"negative_findings": [], "sources": []}
+        
         # Save to session if active
         session = get_active_session()
         if session:
             session.state.battlecards.append(battlecard)
+            
+            # Broadcast to UI
+            if session._on_battlecard:
+                session._on_battlecard(battlecard)
         
         return {
             "status": "success",
@@ -355,7 +395,8 @@ async def get_session_status():
             "screenshots_processed": session.state.screenshots_processed,
             "audio_chunks_processed": session.state.audio_chunks_processed,
             "gemini_calls": session.state.gemini_calls
-        }
+        },
+        "battlecards": session.state.battlecards
     }
 
 
@@ -453,55 +494,79 @@ async def audio_stream(websocket: WebSocket):
     try:
         import tempfile
         import os
+        import asyncio
+        import threading
+        
+        def process_audio_in_background(wav_path: str):
+            """Process audio in background thread to not block WebSocket."""
+            try:
+                session = get_active_session()
+                if session:
+                    # Transcribe
+                    segments = session.transcriber.transcribe_with_speakers(wav_path)
+                    
+                    if segments:
+                        # Add to session state
+                        session.state.transcript_segments.extend(segments)
+                        session.state.audio_chunks_processed += 1
+                        
+                        # Format and broadcast
+                        formatted = session.transcriber.format_transcript_with_speakers(segments)
+                        if session._on_transcript_update:
+                            session._on_transcript_update(formatted)
+                        
+                        print(f"[API] Transcribed: {formatted[:50]}...")
+                    else:
+                        print("[API] No speech detected in audio chunk")
+                else:
+                    print("[API] No active session for audio")
+            except Exception as e:
+                print(f"[API] Background transcription error: {e}")
+            finally:
+                # Cleanup
+                if os.path.exists(wav_path):
+                    try:
+                        os.remove(wav_path)
+                    except:
+                        pass
         
         while True:
             try:
-                # Receive binary WAV data
-                data = await websocket.receive_bytes()
+                # Receive binary WAV data with timeout
+                data = await asyncio.wait_for(websocket.receive_bytes(), timeout=120)
                 
                 if not data:
                     continue
                 
                 print(f"[API] Received audio chunk: {len(data)} bytes")
                 
+                # Send ACK immediately to keep connection alive
+                try:
+                    await websocket.send_text("ACK")
+                except:
+                    pass
+                
                 # Save to temp file
                 fd, wav_path = tempfile.mkstemp(suffix=".wav")
                 os.close(fd)
                 
-                try:
-                    with open(wav_path, 'wb') as f:
-                        f.write(data)
-                    
-                    # Get active session and process audio
-                    session = get_active_session()
-                    if session:
-                        # Use the transcriber to process
-                        segments = session.transcriber.transcribe_with_speakers(wav_path)
-                        
-                        if segments:
-                            # Add to session state
-                            session.state.transcript_segments.extend(segments)
-                            session.state.audio_chunks_processed += 1
-                            
-                            # Format and broadcast
-                            formatted = session.transcriber.format_transcript_with_speakers(segments)
-                            if session._on_transcript_update:
-                                session._on_transcript_update(formatted)
-                            
-                            print(f"[API] Transcribed: {formatted[:50]}...")
-                        else:
-                            print("[API] No speech detected in audio chunk")
-                    else:
-                        print("[API] No active session for audio")
-                        
-                finally:
-                    # Clean up temp file
-                    if os.path.exists(wav_path):
-                        try:
-                            os.remove(wav_path)
-                        except:
-                            pass
+                with open(wav_path, 'wb') as f:
+                    f.write(data)
                 
+                # Process in background thread (don't block WebSocket)
+                threading.Thread(
+                    target=process_audio_in_background, 
+                    args=(wav_path,), 
+                    daemon=True
+                ).start()
+                
+            except asyncio.TimeoutError:
+                # Send ping to check if client is still alive
+                try:
+                    await websocket.send_text("ping")
+                except:
+                    print("[API] Audio stream client timed out")
+                    break
             except WebSocketDisconnect:
                 print("[API] Audio stream client disconnected")
                 break

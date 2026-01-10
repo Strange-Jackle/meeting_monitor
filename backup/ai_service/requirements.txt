@@ -1,0 +1,52 @@
+fastapi
+uvicorn
+gliner
+pydantic
+jinja2
+python-multipart
+python-dotenv
+requests
+pydantic-settings
+
+# Transcription - WhisperX with Speaker Diarization
+whisperx
+pyannote.audio
+
+# Transformers & PyTorch
+transformers
+torch
+torchaudio
+
+# Database - SQLite Async
+aiosqlite
+
+# WebSocket and HTTP
+websockets
+aiohttp
+
+# Browser Testing
+playwright
+
+# Sentiment Analysis
+duckduckgo-search
+vaderSentiment
+
+# Gemini AI
+google-generativeai
+
+# Async utilities
+nest-asyncio
+
+# Screen Capture
+mss
+Pillow
+
+# Audio Capture (WASAPI Loopback)
+sounddevice
+soundfile
+numpy
+
+# Overlay UI
+PyQt6
+pywin32
+websocket-client
