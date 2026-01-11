@@ -279,9 +279,9 @@ STYLES = {
     
     # Typography
     "font_family": "Segoe UI, Arial, sans-serif",
-    "font_heading": "14px",
-    "font_body": "12px",
-    "font_small": "11px",
+    "font_heading": "18px",
+    "font_body": "16px",
+    "font_small": "14px",
     
     # Spacing
     "radius_lg": "16px",
@@ -389,7 +389,7 @@ class InsightDetailPanel(FloatingPanel):
         self.hint_text = hint_text
         self.context = context
         self._setup_ui()
-        self.resize(280, 200)
+        self.resize(340, 260)
         if parent_panel:
             self._position_snapped()
         
@@ -422,7 +422,7 @@ class InsightDetailPanel(FloatingPanel):
         header = QLabel("INSIGHT DETAILS")
         header.setStyleSheet(f"""
             color: {STYLES['accent_cyan']};
-            font-size: 10px;
+            font-size: 12px;
             font-weight: bold;
             letter-spacing: 1px;
         """)
@@ -451,7 +451,7 @@ class InsightDetailPanel(FloatingPanel):
         self.insight_label.setWordWrap(True)
         self.insight_label.setStyleSheet(f"""
             color: {STYLES['text_primary']};
-            font-size: 13px;
+            font-size: 15px;
             padding: 8px;
             background-color: {STYLES['bg_secondary']};
             border-radius: {STYLES['radius_sm']};
@@ -464,7 +464,7 @@ class InsightDetailPanel(FloatingPanel):
         self.context_label.setWordWrap(True)
         self.context_label.setStyleSheet(f"""
             color: {STYLES['text_secondary']};
-            font-size: 11px;
+            font-size: 14px;
             padding: 4px;
         """)
         layout.addWidget(self.context_label)
@@ -487,7 +487,7 @@ class BattlecardPanel(FloatingPanel):
         self.competitor = competitor or "Competitor"
         self.counter_points = counter_points or []
         self._setup_ui()
-        self.resize(300, 250)
+        self.resize(360, 320)
         if parent_panel:
             self._position_snapped()
         
@@ -520,7 +520,7 @@ class BattlecardPanel(FloatingPanel):
         header = QLabel("BATTLECARD")
         header.setStyleSheet(f"""
             color: {STYLES['warning']};
-            font-size: 11px;
+            font-size: 12px;
             font-weight: bold;
             letter-spacing: 1px;
         """)
@@ -548,7 +548,7 @@ class BattlecardPanel(FloatingPanel):
         self.competitor_label = QLabel(f"vs {self.competitor}")
         self.competitor_label.setStyleSheet(f"""
             color: {STYLES['text_primary']};
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
             padding: 4px 0;
         """)
@@ -578,7 +578,7 @@ class BattlecardPanel(FloatingPanel):
         point.setWordWrap(True)
         point.setStyleSheet(f"""
             color: {STYLES['text_secondary']};
-            font-size: 11px;
+            font-size: 14px;
             padding: 4px 8px;
             background-color: {STYLES['bg_secondary']};
             border-radius: {STYLES['radius_sm']};
@@ -633,6 +633,11 @@ class StealthOverlay(QMainWindow):
         self.insight_panel = None
         self.battlecard_panel = None
         
+        # Battlecard state: track if dismissed and if there's pending data
+        self._battlecard_dismissed = False  # User closed it manually
+        self._battlecard_shown_once = False  # Has been shown at least once
+        self._pending_battlecard_data = None  # Store latest data for button click
+        
         # Demo mode state
         self._demo_active = False
         self._demo_timer = None
@@ -659,69 +664,10 @@ class StealthOverlay(QMainWindow):
         
         self._setup_ui()
         self._setup_window()
-
-    def _on_battlecard_updated(self, card_data: dict):
-        """Show or update battlecard panel."""
-        competitor = card_data.get("competitor", "Unknown")
-        # Extract differentiation points or negative findings
-        points = []
         
-        # Add differentiation points
-        diffs = card_data.get("differentiation", [])
-        if diffs:
-            points.extend(diffs[:2])
-            
-        # Add web research findings (negative insights)
-        web_research = card_data.get("web_research", {})
-        negatives = web_research.get("negative_findings", [])
-        if negatives:
-            points.extend([f"[Web] {n}" for n in negatives[:2]])
-            
-        # Fallback if empty
-        if not points:
-            points = ["Analyzing competitor weaknesses..."]
-            
-        if not self.battlecard_panel:
-            self.battlecard_panel = BattlecardPanel(self, competitor=competitor, counter_points=points)
-            self.battlecard_panel.show()
-        else:
-            self.battlecard_panel.set_content(competitor, points)
-            if not self.battlecard_panel.isVisible():
-                self.battlecard_panel.show()
-                
-    def _check_status_loop(self):
-        """Poll API for session updates (fallback for WebSocket)."""
-        while self.signals:  # Check if object still alive
-            if not self._is_recording:
-                time.sleep(1)
-                continue
-                
-            try:
-                response = requests.get(f"{self.API_BASE_URL}/session-status", timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Update hints
-                    hints = data.get("hints", [])
-                    if hints:
-                        self.update_hints(hints)
-                        
-                    # Update entities
-                    entities = data.get("entities", [])
-                    if entities:
-                        self.update_entities(entities)
-                        
-                    # Update battlecards
-                    battlecards = data.get("battlecards", [])
-                    if battlecards:
-                        # Only show the latest one
-                        self.signals.battlecard_updated.emit(battlecards[-1])
-                        
-            except:
-                pass
-            time.sleep(2)
+    def _setup_window(self):
         """Configure window properties."""
-        self.setWindowTitle("TF-Assistant - Sales Intelligence")
+        self.setWindowTitle("TW-Assistant - Sales Intelligence")
         
         # Frameless, always on top, tool window (doesn't show in taskbar)
         self.setWindowFlags(
@@ -734,7 +680,7 @@ class StealthOverlay(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # Position: Bottom-right corner - larger for better visibility
-        self.resize(380, 480)
+        self.resize(380, 700)
         self._position_window()
         
     def _position_window(self):
@@ -830,8 +776,28 @@ class StealthOverlay(QMainWindow):
         self.negative_label.setToolTip("Negative Faces Detected")
         sentiment_row.addWidget(self.negative_label)
         
+        # Sentiment Indicator Box (inline with emojis)
+        self.sentiment_box = QLabel("Analyzing...")
+        self.sentiment_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sentiment_box.setStyleSheet(f"""
+            QLabel {{
+                color: {STYLES['text_secondary']};
+                background: {STYLES['bg_tertiary']};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 8px;
+                border: 1px solid {STYLES['border_subtle']};
+            }}
+        """)
+        self.sentiment_box.setToolTip("Client engagement indicator based on facial sentiment")
+        sentiment_row.addWidget(self.sentiment_box)
+        
         sentiment_row.addStretch()
         layout.addLayout(sentiment_row)
+        
+        # Track last sentiment state for animation
+        self._last_sentiment_state = "neutral"
         
         # Control buttons
         controls = self._create_controls()
@@ -865,7 +831,7 @@ class StealthOverlay(QMainWindow):
         brand_layout.addWidget(logo)
         
         # Brand name
-        title = QLabel("TF-Assistant")
+        title = QLabel("TW-Assistant")
         title.setStyleSheet(f"""
             color: {STYLES['text_primary']};
             font-size: 15px;
@@ -1348,6 +1314,9 @@ class StealthOverlay(QMainWindow):
                     context=context
                 )
                 self.insight_panel.show()
+                # Apply stealth mode if enabled
+                if self._stealth_enabled:
+                    self._apply_stealth_to_window(self.insight_panel, True)
                 print(f"[TF] Showing insight: {hint_text[:30]}...")
     
     def _get_insight_context(self, hint_text: str) -> str:
@@ -1418,7 +1387,7 @@ class StealthOverlay(QMainWindow):
                 color: {STYLES['text_primary']};
                 border: 1px solid {STYLES['border_subtle']};
                 border-radius: {STYLES['radius_sm']};
-                font-size: 11px;
+                font-size: 16px;
                 font-family: {STYLES['font_family']};
                 padding: 8px;
                 selection-background-color: {STYLES['accent_cyan']};
@@ -1440,36 +1409,48 @@ class StealthOverlay(QMainWindow):
                 height: 0px;
             }}
         """)
-        self.transcript_text.setMaximumHeight(140)
+        self.transcript_text.setMaximumHeight(400)
         self.transcript_text.setPlaceholderText("Waiting for transcript...")
         layout.addWidget(self.transcript_text)
         
         return panel
     
     def _format_speaker_text(self, text: str) -> str:
-        """Format transcript text with colored speaker labels."""
-        # Replace speaker tags with HTML colored versions
+        """Format transcript text with colored speaker labels on separate lines."""
+        # Replace speaker tags with HTML colored versions (with line break before)
         formatted = text
         
-        # Speaker 1 - cyan
+        # Speaker 1 - cyan (add line break before for separation)
         formatted = formatted.replace(
             "[SALES_REP]", 
-            f'<span style="color: {STYLES["accent_cyan"]}; font-weight: bold;">[Speaker 1]</span>'
+            f'<br><span style="color: {STYLES["accent_cyan"]}; font-weight: bold;">[Speaker 1]</span>'
         )
         formatted = formatted.replace(
             "[SPEAKER_00]", 
-            f'<span style="color: {STYLES["accent_cyan"]}; font-weight: bold;">[Speaker 1]</span>'
+            f'<br><span style="color: {STYLES["accent_cyan"]}; font-weight: bold;">[Speaker 1]</span>'
+        )
+        formatted = formatted.replace(
+            "[Speaker 1]", 
+            f'<br><span style="color: {STYLES["accent_cyan"]}; font-weight: bold;">[Speaker 1]</span>'
         )
         
-        # Speaker 2 - gold
+        # Speaker 2 - gold (add line break before for separation)
         formatted = formatted.replace(
             "[CLIENT]", 
-            f'<span style="color: #FFD700; font-weight: bold;">[Speaker 2]</span>'
+            f'<br><span style="color: #FFD700; font-weight: bold;">[Speaker 2]</span>'
         )
         formatted = formatted.replace(
             "[SPEAKER_01]", 
-            f'<span style="color: #FFD700; font-weight: bold;">[Speaker 2]</span>'
+            f'<br><span style="color: #FFD700; font-weight: bold;">[Speaker 2]</span>'
         )
+        formatted = formatted.replace(
+            "[Speaker 2]", 
+            f'<br><span style="color: #FFD700; font-weight: bold;">[Speaker 2]</span>'
+        )
+        
+        # Clean up any leading <br> at the start
+        if formatted.startswith('<br>'):
+            formatted = formatted[4:]
         
         return formatted
     
@@ -1515,7 +1496,9 @@ class StealthOverlay(QMainWindow):
         self.battlecard_btn = QPushButton("Battlecard")
         self.battlecard_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.battlecard_btn.setToolTip("Show Battlecard")
-        self.battlecard_btn.setStyleSheet(f"""
+        
+        # Store normal and highlight styles for battlecard button
+        self._battlecard_btn_normal_style = f"""
             QPushButton {{
                 background-color: {STYLES['bg_tertiary']};
                 color: {STYLES['text_secondary']};
@@ -1530,7 +1513,24 @@ class StealthOverlay(QMainWindow):
                 color: {STYLES['warning']};
                 border-color: {STYLES['warning']};
             }}
-        """)
+        """
+        self._battlecard_btn_highlight_style = f"""
+            QPushButton {{
+                background-color: rgba(255, 145, 0, 0.3);
+                color: {STYLES['warning']};
+                border: 2px solid {STYLES['warning']};
+                border-radius: {STYLES['radius_sm']};
+                padding: 10px 16px;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 145, 0, 0.4);
+                color: white;
+                border-color: {STYLES['warning']};
+            }}
+        """
+        self.battlecard_btn.setStyleSheet(self._battlecard_btn_normal_style)
         self.battlecard_btn.clicked.connect(self._show_battlecard)
         row1.addWidget(self.battlecard_btn)
         
@@ -1648,9 +1648,31 @@ class StealthOverlay(QMainWindow):
         """Show battlecard panel for competitor with dynamic API data."""
         print("[TF] Battlecard requested")
         
+        # Reset button to normal style when clicked
+        if hasattr(self, '_battlecard_btn_normal_style'):
+            self.battlecard_btn.setStyleSheet(self._battlecard_btn_normal_style)
+            self.battlecard_btn.setToolTip("Show Battlecard")
+        
         # Close existing panel if open
         if self.battlecard_panel and self.battlecard_panel.isVisible():
             self.battlecard_panel.close()
+        
+        # Mark as shown
+        self._battlecard_shown_once = True
+        
+        # If we have pending data, use it immediately
+        if self._pending_battlecard_data:
+            self.battlecard_panel = BattlecardPanel(
+                parent_panel=self,
+                competitor=self._pending_battlecard_data["competitor"],
+                counter_points=self._pending_battlecard_data["points"]
+            )
+            self.battlecard_panel.show()
+            # Apply stealth mode if enabled
+            if self._stealth_enabled:
+                self._apply_stealth_to_window(self.battlecard_panel, True)
+            print(f"[TF] Battlecard panel opened with pending data: {self._pending_battlecard_data['competitor']}")
+            return
         
         # Create battlecard panel with LOADING state (no hardcoded data)
         self.battlecard_panel = BattlecardPanel(
@@ -1659,17 +1681,9 @@ class StealthOverlay(QMainWindow):
             counter_points=["Fetching competitive intelligence from API..."]
         )
         self.battlecard_panel.show()
-        
-        # Disconnect any existing connections to prevent duplicates
-        try:
-            self.signals.battlecard_updated.disconnect(self._on_battlecard_updated)
-        except TypeError:
-            pass  # Not connected yet, that's fine
-        
-        # Connect signal for this update
-        self.signals.battlecard_updated.connect(self._on_battlecard_updated)
-        
-        # Fetch real data from backend API
+        # Apply stealth mode if enabled
+        if self._stealth_enabled:
+            self._apply_stealth_to_window(self.battlecard_panel, True)
         import threading
         def fetch_battlecard():
             try:
@@ -1702,21 +1716,54 @@ class StealthOverlay(QMainWindow):
         threading.Thread(target=fetch_battlecard, daemon=True).start()
 
     def _on_battlecard_updated(self, data: dict):
-        """Update battlecard panel with API data."""
-        if self.battlecard_panel:
-            print(f"[TF DEBUG] Battlecard data received: {data}")
-            
-            # Handle different field names from API
-            competitor = data.get("competitor") or data.get("competitor_name") or "Competitor"
-            points = data.get("points") or data.get("counter_points") or data.get("talking_points") or []
-            
-            # If points is a string, convert to list
-            if isinstance(points, str):
-                points = [points]
-            
-            # Always update if we have a competitor name (even with empty points for loading state)
-            if competitor != "Loading...":
-                self.battlecard_panel.set_content(competitor, points if points else ["No competitive insights available"])
+        """Update battlecard panel with API data. Only auto-opens once, then highlights button for updates."""
+        print(f"[TF DEBUG] Battlecard data received: {data}")
+        
+        # Handle different field names from API
+        competitor = data.get("competitor") or data.get("competitor_name") or "Competitor"
+        points = data.get("points") or data.get("counter_points") or data.get("talking_points") or []
+        
+        # If points is a string, convert to list
+        if isinstance(points, str):
+            points = [points]
+        
+        # Skip if just loading placeholder
+        if competitor == "Loading...":
+            return
+        
+        # Always store the latest data for button click
+        self._pending_battlecard_data = {
+            "competitor": competitor,
+            "points": points if points else ["No competitive insights available"]
+        }
+        
+        # If panel is currently visible, update it
+        if self.battlecard_panel and self.battlecard_panel.isVisible():
+            self.battlecard_panel.set_content(competitor, points if points else ["No competitive insights available"])
+            print(f"[TF] Battlecard panel updated for: {competitor}")
+        # If never shown before, auto-open it once
+        elif not self._battlecard_shown_once:
+            self._battlecard_shown_once = True
+            self.battlecard_panel = BattlecardPanel(
+                parent_panel=self,
+                competitor=competitor,
+                counter_points=points if points else ["No competitive insights available"]
+            )
+            self.battlecard_panel.show()
+            # Apply stealth mode if enabled
+            if self._stealth_enabled:
+                self._apply_stealth_to_window(self.battlecard_panel, True)
+            print(f"[TF] Battlecard panel opened for: {competitor}")
+        # If previously shown but now closed/dismissed, just highlight the button
+        else:
+            self._highlight_battlecard_button()
+            print(f"[TF] Battlecard button highlighted - new data for: {competitor}")
+    
+    def _highlight_battlecard_button(self):
+        """Highlight the battlecard button to indicate new data is available."""
+        if hasattr(self, '_battlecard_btn_highlight_style'):
+            self.battlecard_btn.setStyleSheet(self._battlecard_btn_highlight_style)
+            self.battlecard_btn.setToolTip("New Battlecard Available! Click to view")
     
     def _upload_audio(self):
         """Open file dialog to upload audio."""
@@ -1841,7 +1888,8 @@ class StealthOverlay(QMainWindow):
                     "Identify key pain points early"
                 ],
                 "context": "Start by establishing a personal connection. Use their name naturally and show genuine interest in their business challenges.",
-                "confidence": 45
+                "confidence": 45,
+                "face_sentiment": {"happy": 0, "negative": 1}
             },
             {
                 "transcript": "[Speaker 2]: Of course, we've been looking at several solutions. We're currently using Salesforce but the implementation has been challenging.",
@@ -1861,7 +1909,8 @@ class StealthOverlay(QMainWindow):
                         "We offer dedicated onboarding support",
                         "No hidden fees - transparent pricing model"
                     ]
-                }
+                },
+                "face_sentiment": {"happy": 0, "negative": 2}
             },
             {
                 "transcript": "[Speaker 1]: I completely understand. Many of our clients switched from Salesforce because of complex implementations. What specific issues are you facing?",
@@ -1872,7 +1921,8 @@ class StealthOverlay(QMainWindow):
                     "Listen for buying signals"
                 ],
                 "context": "You're building trust with empathy. Now dig deeper - ask open-ended questions to uncover their specific needs.",
-                "confidence": 62
+                "confidence": 62,
+                "face_sentiment": {"happy": 1, "negative": 2}
             },
             {
                 "transcript": "[Speaker 2]: The main issue is training time. Our team spent three months just learning the system and we still aren't using half the features.",
@@ -1883,7 +1933,8 @@ class StealthOverlay(QMainWindow):
                     "Mention our free training resources"
                 ],
                 "context": "Training is their key pain point. Our 5-day onboarding and unlimited training sessions directly address this. Share the 'Acme Corp' case study.",
-                "confidence": 70
+                "confidence": 70,
+                "face_sentiment": {"happy": 2, "negative": 2}
             },
             {
                 "transcript": "[Speaker 1]: That's a common frustration. Our average onboarding time is just 5 days, and we include unlimited training sessions at no extra cost.",
@@ -1894,7 +1945,8 @@ class StealthOverlay(QMainWindow):
                     "Propose a pilot program"
                 ],
                 "context": "Great value proposition! Now transition to qualifying - ask about budget, timeline, and other stakeholders.",
-                "confidence": 78
+                "confidence": 78,
+                "face_sentiment": {"happy": 3, "negative": 2}
             },
             {
                 "transcript": "[Speaker 2]: That sounds much better. What about pricing? Our budget is around $50,000 for this quarter.",
@@ -1905,7 +1957,8 @@ class StealthOverlay(QMainWindow):
                     "Highlight ROI calculator"
                 ],
                 "context": "$50K/quarter fits our Enterprise tier perfectly. The 20% annual discount brings it to $160K/year - well within budget. Use the ROI calculator.",
-                "confidence": 82
+                "confidence": 82,
+                "face_sentiment": {"happy": 4, "negative": 2}
             },
             {
                 "transcript": "[Speaker 1]: We can definitely work within that budget. For annual commitments, we offer a 20% discount which would give you premium features plus priority support.",
@@ -1916,7 +1969,8 @@ class StealthOverlay(QMainWindow):
                     "Schedule follow-up with stakeholders"
                 ],
                 "context": "Discount offered - now create urgency. Ask about their decision timeline and who else needs to be involved.",
-                "confidence": 88
+                "confidence": 88,
+                "face_sentiment": {"happy": 5, "negative": 2}
             },
             {
                 "transcript": "[Speaker 2]: That's interesting. I'll need to discuss with our CFO, Michael, but I'm personally very impressed. When can we schedule a demo for the full team?",
@@ -1927,7 +1981,8 @@ class StealthOverlay(QMainWindow):
                     "Prepare ROI presentation for finance"
                 ],
                 "context": "🎉 Great closing! Demo requested = strong buying signal. Schedule within the week and prepare CFO-focused ROI presentation.",
-                "confidence": 92
+                "confidence": 92,
+                "face_sentiment": {"happy": 7, "negative": 2}
             }
         ]
         
@@ -1972,6 +2027,10 @@ class StealthOverlay(QMainWindow):
                     # Update existing panel
                     self.battlecard_panel.set_content(bc["competitor"], bc["points"])
             
+            # Update face sentiment (for demo)
+            if step.get("face_sentiment"):
+                self.signals.face_sentiment_updated.emit(step["face_sentiment"])
+            
             self._demo_step += 1
             self._last_demo_time = current_time
             
@@ -1984,25 +2043,42 @@ class StealthOverlay(QMainWindow):
     
     # ==================== STEALTH MODE ====================
     
+    def _apply_stealth_to_window(self, window, enabled: bool) -> bool:
+        """Apply stealth mode to a specific window."""
+        if sys.platform != 'win32' or window is None:
+            return False
+        
+        try:
+            hwnd = int(window.winId())
+            user32 = ctypes.windll.user32
+            affinity = WDA_EXCLUDEFROMCAPTURE if enabled else WDA_NONE
+            result = user32.SetWindowDisplayAffinity(hwnd, affinity)
+            return bool(result)
+        except Exception as e:
+            print(f"[Overlay] Stealth apply error: {e}")
+            return False
+    
     def set_stealth_mode(self, enabled: bool):
         """
         Enable or disable stealth mode (hidden from screen capture).
         
         Uses Windows SetWindowDisplayAffinity API.
         Only works on Windows 10 version 2004+ (Build 19041+).
+        Applies to main window AND all floating panels.
         """
         if sys.platform != 'win32':
             print("[Overlay] Stealth mode only supported on Windows")
             return False
         
         try:
-            hwnd = int(self.winId())
+            # Apply to main window
+            result = self._apply_stealth_to_window(self, enabled)
             
-            # Get function from user32
-            user32 = ctypes.windll.user32
-            
-            affinity = WDA_EXCLUDEFROMCAPTURE if enabled else WDA_NONE
-            result = user32.SetWindowDisplayAffinity(hwnd, affinity)
+            # Apply to floating panels if they exist
+            if self.insight_panel and self.insight_panel.isVisible():
+                self._apply_stealth_to_window(self.insight_panel, enabled)
+            if self.battlecard_panel and self.battlecard_panel.isVisible():
+                self._apply_stealth_to_window(self.battlecard_panel, enabled)
             
             if result:
                 self._stealth_enabled = enabled
@@ -2436,19 +2512,85 @@ class StealthOverlay(QMainWindow):
             self.entities_label.setStyleSheet("color: #888; font-size: 11px;")
     
     def _on_face_sentiment_updated(self, data: dict):
-        """Update face sentiment counter labels."""
+        """Update face sentiment counter labels and sentiment indicator box."""
         happy = data.get("happy", 0)
         negative = data.get("negative", 0)
         
         self.happy_label.setText(f"😊 {happy}")
         self.negative_label.setText(f"😠 {negative}")
         
-        print(f"[Overlay] Face sentiment: happy={happy}, negative={negative}")
+        # Determine overall sentiment and update the indicator box
+        if happy >= negative and (happy > 0 or negative > 0):
+            new_state = "positive"
+            text = "Engaged!"
+            bg_color = "rgba(0, 230, 118, 0.2)"
+            border_color = STYLES['success']
+            text_color = STYLES['success']
+        elif negative > happy:
+            new_state = "negative"
+            text = "Not Engaged"
+            bg_color = "rgba(255, 82, 82, 0.2)"
+            border_color = STYLES['error']
+            text_color = STYLES['error']
+        else:
+            new_state = "neutral"
+            text = "Analyzing..."
+            bg_color = STYLES['bg_tertiary']
+            border_color = STYLES['border_subtle']
+            text_color = STYLES['text_secondary']
+        
+        # Check if state changed for animation
+        state_changed = new_state != getattr(self, '_last_sentiment_state', 'neutral')
+        self._last_sentiment_state = new_state
+        
+        # Update the sentiment box
+        self.sentiment_box.setText(text)
+        self.sentiment_box.setStyleSheet(f"""
+            QLabel {{
+                color: {text_color};
+                background: {bg_color};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 8px;
+                border: 1px solid {border_color};
+            }}
+        """)
+        
+        # Subtle pulse animation when state changes
+        if state_changed and new_state != "neutral":
+            # Brief highlight then fade back
+            highlight_color = STYLES['success'] if new_state == "positive" else STYLES['error']
+            self.sentiment_box.setStyleSheet(f"""
+                QLabel {{
+                    color: white;
+                    background: {highlight_color};
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 4px 8px;
+                    border-radius: 8px;
+                    border: 2px solid {highlight_color};
+                }}
+            """)
+            # Revert to normal style after 300ms
+            QTimer.singleShot(300, lambda: self.sentiment_box.setStyleSheet(f"""
+                QLabel {{
+                    color: {text_color};
+                    background: {bg_color};
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 4px 8px;
+                    border-radius: 8px;
+                    border: 1px solid {border_color};
+                }}
+            """))
+        
+        print(f"[Overlay] Face sentiment: happy={happy}, negative={negative}, state={new_state}")
     
     # ==================== EVENT HANDLERS ====================
     
     # API Configuration
-    API_BASE_URL = "http://10.119.65.34:8000/api/v1"
+    API_BASE_URL = "http://127.0.0.1:8000/api/v1"
     
     def _on_start_clicked(self):
         """Handle start/stop button click."""
@@ -2738,11 +2880,14 @@ class StealthOverlay(QMainWindow):
                                     self.update_status(status)
                             elif msg_type == "entities":
                                 self.update_entities(data.get("entities", []))
-                            elif msg_type == "battlecard":
-                                print(f"[Overlay DEBUG] Received battlecard: {data.get('data', {}).get('competitor')}")
-                                self.signals.battlecard_updated.emit(data.get("data", {}))
                             elif msg_type == "face_sentiment":
                                 self.signals.face_sentiment_updated.emit(data)
+                            elif msg_type == "battlecard":
+                                # Backend sends {"type": "battlecard", "battlecard": {...}}
+                                # Extract the battlecard data before emitting
+                                battlecard_data = data.get("battlecard", data)
+                                print(f"[Overlay DEBUG] Received battlecard for: {battlecard_data.get('competitor', 'Unknown')}")
+                                self.signals.battlecard_updated.emit(battlecard_data)
                             elif msg_type == "ping":
                                 # Server keep-alive, ignore
                                 pass
@@ -2794,7 +2939,7 @@ class StealthOverlay(QMainWindow):
                         
             except ImportError:
                 print("[Overlay] websocket-client not installed, using polling instead")
-                threading.Thread(target=self._check_status_loop, daemon=True).start()
+                self._poll_for_updates()
             except Exception as e:
                 print(f"[Overlay] WebSocket error: {e}")
                 import traceback

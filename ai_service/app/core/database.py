@@ -44,7 +44,10 @@ class Database:
                 final_transcript TEXT,
                 summary TEXT,
                 entities TEXT,
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                meeting_type TEXT DEFAULT 'Call',
+                duration_seconds REAL DEFAULT 0,
+                odoo_lead_id INTEGER
             );
             
             CREATE TABLE IF NOT EXISTS starred_hints (
@@ -61,7 +64,61 @@ class Database:
                 session_id INTEGER,
                 competitor TEXT NOT NULL,
                 points TEXT NOT NULL,
+                web_research TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                name TEXT,
+                email TEXT,
+                phone TEXT,
+                company TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                text TEXT NOT NULL,
+                label TEXT NOT NULL,
+                score REAL DEFAULT 0,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS engagement_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                attention INTEGER DEFAULT 0,
+                interaction INTEGER DEFAULT 0,
+                sentiment INTEGER DEFAULT 0,
+                speaking INTEGER DEFAULT 0,
+                participation INTEGER DEFAULT 0,
+                clarity INTEGER DEFAULT 0,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS action_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                description TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+            
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                filename TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                file_size INTEGER DEFAULT 0,
+                file_path TEXT NOT NULL,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
         """)

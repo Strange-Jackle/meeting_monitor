@@ -1,0 +1,8 @@
+{
+  "name": "Meeting Monitor",
+  "description": "A minimalist, high-performance dashboard with a cinematic entry and modern documentation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
