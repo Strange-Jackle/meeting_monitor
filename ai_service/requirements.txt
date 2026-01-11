@@ -17,8 +17,9 @@ transformers
 torch
 torchaudio
 
-# Database - SQLite Async
+# Database - SQLite with SQLAlchemy ORM
 aiosqlite
+sqlalchemy
 
 # WebSocket and HTTP
 websockets
@@ -27,9 +28,10 @@ aiohttp
 # Browser Testing
 playwright
 
-# Sentiment Analysis
+# Sentiment Analysis & Web Research
 duckduckgo-search
 vaderSentiment
+trafilatura
 
 # Gemini AI
 google-generativeai
@@ -50,3 +52,12 @@ numpy
 PyQt6
 pywin32
 websocket-client
+
+# Face Sentiment Analysis (CPU-only)
+deepface
+opencv-python>=4.8
+
+# Document Parsing for Ollama Analysis
+PyMuPDF
+python-pptx
+python-docx

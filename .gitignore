@@ -12,20 +12,24 @@ dist/
 # Virtual Environment
 .venv/
 venv/
+env/
 
 # IDE
 .idea/
 .vscode/
 *.swp
+*.swo
 
 # Environment Variables (PRIVATE!)
 .env
 *.env
+!*.env.example
 
 # Database (local SQLite)
 *.db
 *.sqlite3
 meeting_monitor.db
+ai_service/data/
 
 # Logs & Temp
 *.log
@@ -36,12 +40,14 @@ temp_audio/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Audio/Media artifacts
 *.wav
 *.mp3
 *.webm
 test_*.png
+*.webp
 
 # Model cache (large files)
 hub/
@@ -53,21 +59,38 @@ models/
 
 # HuggingFace cache
 .cache/
+~/.deepface/
 
-# Deprecated
+# Deprecated/Legacy
 vexa_engine/
 
-# Development
+# Development tools
 .gemini/
 .pytest_cache/
 .mypy_cache/
 htmlcov/
+coverage/
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Scripts
+# Scripts (dev only)
 check_whisperx.py
-ARCHITECTURE_FOR_LLM.md
-hackathon_upgrade_spec.md
-ARCHITECTURE_FOR_LLM.md
+kimik*.md
+test_*.py
+
+# Node.js (Dashboard)
+meeting_monitor-dashboard/node_modules/
+meeting_monitor-dashboard/dist/
+meeting_monitor-dashboard/.vite/
+npm-debug.log*
+
+# Backup folders
+backup/
+
+# Document uploads (runtime data)
+ai_service/uploads/
+
+# Generated reports
+ai_document_analyzer.py
+document_processor.py

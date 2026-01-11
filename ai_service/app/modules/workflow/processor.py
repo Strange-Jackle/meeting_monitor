@@ -27,7 +27,7 @@ class LeadWorkflowProcessor:
         self.insights_service = WebInsightService()
         # Note: Live meeting monitoring now handled by live_session.py
 
-    async def process_summary_to_lead(self, summary_content: str) -> Dict[str, Any]:
+    async def process_summary_to_lead(self, summary_content: str, starred_hints: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Orchestrates: Input -> Extract -> Transform -> Odoo -> Return Result
         """
@@ -53,12 +53,8 @@ class LeadWorkflowProcessor:
                 print(f"Error processing insight for {text}: {e}")
                 return None
 
-        tasks = []
-        seen_entities = set()
-        
         # Web Search is free, can handle more concurrency than Gemini Free Tier
         MAX_INSIGHTS = 8
-        insights = []
 
         try:
             print(f"Fetching web insights for top {MAX_INSIGHTS} entities...")
@@ -93,7 +89,13 @@ class LeadWorkflowProcessor:
         
         # 3. Create in Odoo
         try:
-            lead_id = self.odoo.create_lead(candidate)
+            # Wrap synchronous Odoo call in thread to avoid blocking API
+            lead_id = await asyncio.to_thread(
+                self.odoo.create_lead, 
+                candidate,
+                starred_hints
+            )
+            print(f"Lead created successfully in Odoo! ID: {lead_id}")
             status = "success"
         except Exception as e:
             lead_id = None

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     
     # Gemini Config
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
     
     # HuggingFace Token (for pyannote speaker diarization)
     HF_TOKEN: str = os.getenv("HF_TOKEN", "")

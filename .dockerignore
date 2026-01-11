@@ -1,0 +1,50 @@
+# Docker Ignore - Sales Intelligence Pro
+
+# Virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment files
+.env
+*.env
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Temp files
+temp_audio/
+*.tmp
+*.wav
+*.mp3
+
+# Model cache (will be downloaded in container)
+hub/
+models/
+*.pt
+*.bin
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Development files
+check_whisperx.py
+hackathon_upgrade_spec.md
+vexa_engine/

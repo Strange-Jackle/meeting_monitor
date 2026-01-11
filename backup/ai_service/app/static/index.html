@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salesman AI Assistant</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            padding: 2rem;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 150px;
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 1rem;
+            resize: vertical;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            float: right;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 4rem;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .result-box {
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .status-success {
+            background-color: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+        }
+
+        .status-error {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            color: #bdc3c7;
+        }
+
+        .entities-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .entity-chip {
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .entity-label {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            margin-right: 0.25rem;
+            text-transform: uppercase;
+        }
+
+        /* Sidebar & Toasts */
+        .sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            width: 320px;
+            height: 100vh;
+            background: var(--card-bg);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1.5rem;
+            overflow-y: auto;
+            transform: translateX(100%);
+            transition: transform 0.3s ease-in-out;
+            z-index: 1000;
+            box-shadow: -5px 0 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .sidebar.open {
+            transform: translateX(0);
+        }
+
+        .toast-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            animation: slideIn 0.5s ease-out forwards;
+            opacity: 0;
+            transform: translateX(20px);
+        }
+
+        @keyframes slideIn {
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .toast-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            font-size: 1rem;
+            color: var(--text);
+        }
+
+        .toast-type {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .toast-body {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin-bottom: 0.75rem;
+        }
+
+        .toast-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding-top: 0.75rem;
+        }
+
+        .verdict {
+            font-weight: 600;
+        }
+
+        .verdict.Positive {
+            color: #4ade80;
+        }
+
+        .verdict.Mixed {
+            color: #facc15;
+        }
+
+        .verdict.Negative {
+            color: #f87171;
+        }
+
+        .sources {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        /* Deep Dive Details */
+        .toast-card {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .toast-card:hover {
+            transform: translateX(-5px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .toast-card.expanded {
+            border-left: 4px solid var(--primary);
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .toast-details {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 0.85em;
+            display: none;
+            /* Hidden by default */
+        }
+
+        .toast-card.expanded .toast-details {
+            display: block;
+            /* Show when expanded */
+            animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .news-item {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+        }
+
+        .news-item:last-child {
+            border-bottom: none;
+        }
+
+        .news-link {
+            color: #60a5fa;
+            /* Light blue */
+            text-decoration: none;
+            font-weight: 500;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .news-link:hover {
+            text-decoration: underline;
+        }
+
+        .news-meta {
+            font-size: 0.8em;
+            color: #94a3b8;
+        }
+
+        .details-loader {
+            text-align: center;
+            padding: 10px;
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        /* Live Meeting Styles */
+        .live-meeting-section {
+            display: none;
+        }
+
+        .meeting-url-input {
+            width: 100%;
+            padding: 1rem;
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            color: var(--text);
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            box-sizing: border-box;
+        }
+
+        .meeting-url-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .meeting-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #94a3b8;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.active {
+            background: #22c55e;
+        }
+
+        .status-dot.error {
+            background: #ef4444;
+            animation: none;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .live-transcript {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .transcript-line {
+            margin-bottom: 0.5rem;
+            padding: 0.25rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .transcript-speaker {
+            color: #818cf8;
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+
+        .transcript-time {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            float: right;
+        }
+
+        .transcript-placeholder {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Salesman Meeting Monitor</h1>
+            <p class="subtitle">Extract leads from meeting summaries or audio recordings.</p>
+
+            <!-- Tabs -->
+            <div style="margin-bottom: 2rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <button id="tabText" onclick="switchTab('text')"
+                    style="float: none; margin-right: 1rem; background: transparent; border-bottom: 2px solid var(--primary);">Text
+                    Summary</button>
+                <button id="tabAudio" onclick="switchTab('audio')"
+                    style="float: none; margin-right: 1rem; background: transparent; color: var(--text-muted);">Audio
+                    Upload</button>
+                <button id="tabLive" onclick="switchTab('live')"
+                    style="float: none; background: transparent; color: var(--text-muted);">🔴 Live Meeting</button>
+            </div>
+
+            <!-- Text Input -->
+            <div id="sectionText">
+                <textarea id="summaryInput" placeholder="Paste your meeting notes here..."></textarea>
+            </div>
+
+            <!-- Audio Input -->
+            <div id="sectionAudio"
+                style="display: none; margin-bottom: 2rem; text-align: center; border: 2px dashed rgba(255,255,255,0.1); padding: 3rem; border-radius: 1rem;">
+                <input type="file" id="audioInput" accept=".wav,.mp3,.m4a" style="display: none;"
+                    onchange="updateFileName()">
+                <button onclick="document.getElementById('audioInput').click()"
+                    style="float: none; margin-bottom: 1rem;">Select Audio File</button>
+                <p id="fileName" style="color: var(--text-muted); margin-top: 0.5rem;">No file selected</p>
+            </div>
+
+            <!-- Live Meeting Input -->
+            <div id="sectionLive" class="live-meeting-section">
+                <input type="text" id="meetingUrl" class="meeting-url-input"
+                    placeholder="Paste Google Meet URL (e.g., https://meet.google.com/xxx-xxxx-xxx)">
+
+                <div id="meetingStatus" class="meeting-status" style="display: none;">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Ready to join...</span>
+                </div>
+
+                <div id="liveTranscriptContainer" style="display: none;">
+                    <h4>Live Transcript</h4>
+                    <div id="liveTranscript" class="live-transcript">
+                        <div class="transcript-placeholder">Waiting for meeting to start...</div>
+                    </div>
+                </div>
+            </div>
+
+            <button id="processBtn" onclick="processData()">Process</button>
+            <div style="clear: both;"></div>
+
+            <!-- Results -->
+            <div id="result">
+                <h3>Results</h3>
+                <div class="result-box">
+                    <div id="statusBadge" class="status-badge"></div>
+
+                    <h4>Generated Summary</h4>
+                    <pre id="summaryDisplay" style="white-space: pre-wrap; max-height: 200px; overflow-y: auto;">-</pre>
+
+                    <h4>Extracted Entities</h4>
+                    <div id="entitiesGrid" class="entities-grid"></div>
+
+                    <h4>Odoo Lead Candidate</h4>
+                    <pre id="candidateJson"></pre>
+
+                    <p id="leadIdDisplay" style="margin-top: 1rem; font-weight: bold;"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Insights Sidebar -->
+    <div id="insightSidebar" class="sidebar">
+        <h2
+            style="margin-top: 0; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+            ⚡ Quick Insights
+        </h2>
+        <div id="insightsList">
+            <!-- Toasts go here -->
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'text';
+        let meetingWebSocket = null;
+
+        function switchTab(mode) {
+            currentMode = mode;
+            const tabText = document.getElementById('tabText');
+            const tabAudio = document.getElementById('tabAudio');
+            const tabLive = document.getElementById('tabLive');
+            const secText = document.getElementById('sectionText');
+            const secAudio = document.getElementById('sectionAudio');
+            const secLive = document.getElementById('sectionLive');
+            const processBtn = document.getElementById('processBtn');
+
+            // Reset all tabs
+            [tabText, tabAudio, tabLive].forEach(tab => {
+                tab.style.borderBottom = 'none';
+                tab.style.color = 'var(--text-muted)';
+            });
+            [secText, secAudio, secLive].forEach(sec => {
+                sec.style.display = 'none';
+            });
+
+            // Activate selected tab
+            if (mode === 'text') {
+                tabText.style.borderBottom = '2px solid var(--primary)';
+                tabText.style.color = 'var(--text)';
+                secText.style.display = 'block';
+                processBtn.innerText = 'Process';
+            } else if (mode === 'audio') {
+                tabAudio.style.borderBottom = '2px solid var(--primary)';
+                tabAudio.style.color = 'var(--text)';
+                secAudio.style.display = 'block';
+                processBtn.innerText = 'Process';
+            } else if (mode === 'live') {
+                tabLive.style.borderBottom = '2px solid var(--primary)';
+                tabLive.style.color = 'var(--text)';
+                secLive.style.display = 'block';
+                processBtn.innerText = 'Join & Monitor';
+            }
+        }
+
+        function updateFileName() {
+            const input = document.getElementById('audioInput');
+            const display = document.getElementById('fileName');
+            if (input.files.length > 0) {
+                display.innerText = input.files[0].name;
+            } else {
+                display.innerText = "No file selected";
+            }
+        }
+
+        async function processData() {
+            const btn = document.getElementById('processBtn');
+            const resultDiv = document.getElementById('result');
+
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+            resultDiv.style.opacity = '0.5';
+
+            // Clear previous results
+            document.getElementById('summaryDisplay').innerText = '-';
+            document.getElementById('entitiesGrid').innerHTML = '';
+            document.getElementById('candidateJson').innerText = '';
+            document.getElementById('leadIdDisplay').innerText = '';
+            document.getElementById('statusBadge').className = 'status-badge';
+            document.getElementById('statusBadge').innerText = '';
+
+            // Clear & Close Sidebar
+            const sidebar = document.getElementById('insightSidebar');
+            const list = document.getElementById('insightsList');
+            list.innerHTML = '';
+            sidebar.classList.remove('open');
+
+            // Handle Live Meeting mode
+            if (currentMode === 'live') {
+                await processLiveMeeting();
+                return;
+            }
+
+            try {
+                let response;
+
+                if (currentMode === 'text') {
+                    const content = document.getElementById('summaryInput').value;
+                    if (!content.trim()) { alert("Please enter text."); btn.disabled = false; btn.innerText = "Process"; return; }
+
+                    response = await fetch('/api/v1/process-summary', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: content })
+                    });
+                } else {
+                    const fileInput = document.getElementById('audioInput');
+                    if (fileInput.files.length === 0) { alert("Please select a file."); btn.disabled = false; btn.innerText = "Process"; return; }
+
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+
+                    response = await fetch('/api/v1/process-audio', {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+
+                if (!response.ok) {
+                    throw new Error("Server Error");
+                }
+
+                const data = await response.json();
+                renderResults(data);
+
+            } catch (error) {
+                console.error(error);
+                alert("Error processing request.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Process";
+            }
+        }
+
+        async function processLiveMeeting() {
+            const btn = document.getElementById('processBtn');
+            const meetingUrl = document.getElementById('meetingUrl').value.trim();
+
+            if (!meetingUrl) {
+                alert("Please enter a meeting URL.");
+                btn.disabled = false;
+                btn.innerText = 'Join & Monitor';
+                return;
+            }
+
+            // Show status UI
+            const statusDiv = document.getElementById('meetingStatus');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const transcriptContainer = document.getElementById('liveTranscriptContainer');
+            const transcriptDiv = document.getElementById('liveTranscript');
+
+            statusDiv.style.display = 'flex';
+            transcriptContainer.style.display = 'block';
+            transcriptDiv.innerHTML = '<div class="transcript-placeholder">Connecting to meeting...</div>';
+            statusText.innerText = 'Initiating bot...';
+            btn.innerText = 'Joining...';
+
+            try {
+                // 1. Start the meeting session
+                const response = await fetch('/api/v1/process-meeting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ meeting_url: meetingUrl })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start meeting');
+                }
+
+                const sessionData = await response.json();
+                const sessionId = sessionData.session_id;
+                statusText.innerText = `Session created: ${sessionData.native_id}`;
+
+                // 2. Connect via WebSocket
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}/api/v1/meeting-stream/${sessionId}`;
+
+                meetingWebSocket = new WebSocket(wsUrl);
+
+                meetingWebSocket.onopen = () => {
+                    statusText.innerText = 'Connected! Waiting for bot to join...';
+                    statusDot.classList.add('active');
+                    transcriptDiv.innerHTML = '';
+                };
+
+                meetingWebSocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    handleMeetingMessage(data, transcriptDiv, statusText, statusDot);
+                };
+
+                meetingWebSocket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    statusText.innerText = 'Connection error';
+                    statusDot.classList.remove('active');
+                    statusDot.classList.add('error');
+                };
+
+                meetingWebSocket.onclose = () => {
+                    btn.disabled = false;
+                    btn.innerText = 'Join & Monitor';
+                    if (!statusDot.classList.contains('error')) {
+                        statusText.innerText = 'Meeting ended';
+                    }
+                };
+
+            } catch (error) {
+                console.error('Meeting error:', error);
+                statusText.innerText = `Error: ${error.message}`;
+                statusDot.classList.add('error');
+                btn.disabled = false;
+                btn.innerText = 'Join & Monitor';
+            }
+        }
+
+        function handleMeetingMessage(data, transcriptDiv, statusText, statusDot) {
+            if (data.type === 'status') {
+                statusText.innerText = data.message || data.status;
+                if (data.status === 'active') {
+                    statusDot.classList.add('active');
+                }
+            } else if (data.type === 'transcript') {
+                const segment = data.segment;
+                const line = document.createElement('div');
+                line.className = 'transcript-line';
+                line.innerHTML = `
+                    <span class="transcript-speaker">${segment.speaker || 'Unknown'}:</span>
+                    <span>${segment.text}</span>
+                `;
+                transcriptDiv.appendChild(line);
+                transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+            } else if (data.type === 'result') {
+                // Final result - show in main results area
+                statusText.innerText = 'Meeting processed! See results below.';
+                renderResults(data.data);
+            } else if (data.type === 'error') {
+                statusText.innerText = `Error: ${data.message}`;
+                statusDot.classList.remove('active');
+                statusDot.classList.add('error');
+            }
+        }
+
+        function renderResults(data) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.opacity = '1';
+
+            // Summary
+            if (data.summary) {
+                document.getElementById('summaryDisplay').innerText = data.summary;
+            } else if (data.candidate && data.candidate.source_summary) {
+                document.getElementById('summaryDisplay').innerText = data.candidate.source_summary;
+            }
+
+            // Status
+            const statusBadge = document.getElementById('statusBadge');
+            if (data.status === 'success') {
+                statusBadge.className = 'status-badge status-success';
+                statusBadge.innerText = 'Synced to Odoo';
+            } else {
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.innerText = 'Sync Failed';
+            }
+
+            // Entities
+            const entitiesGrid = document.getElementById('entitiesGrid');
+            if (data.entities) {
+                data.entities.forEach(ent => {
+                    const chip = document.createElement('div');
+                    chip.className = 'entity-chip';
+                    chip.innerHTML = `<span class="entity-label">${ent.label}</span> ${ent.text}`;
+                    entitiesGrid.appendChild(chip);
+                });
+            }
+
+            // Candidate
+            if (data.candidate) {
+                document.getElementById('candidateJson').innerText = JSON.stringify(data.candidate, null, 2);
+            }
+
+            // ID
+            const leadDisplay = document.getElementById('leadIdDisplay');
+            if (data.lead_id) {
+                leadDisplay.innerText = `Created Lead ID: ${data.lead_id}`;
+                leadDisplay.style.color = '#4ade80';
+            } else {
+                leadDisplay.innerText = data.status || "Error";
+                leadDisplay.style.color = '#f87171';
+            }
+
+            // Insights
+            if (data.insights && data.insights.length > 0) {
+                renderInsights(data.insights);
+            }
+        }
+
+        function renderInsights(insights) {
+            const sidebar = document.getElementById('insightSidebar');
+            const list = document.getElementById('insightsList');
+
+            sidebar.classList.add('open');
+
+            insights.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'toast-card';
+                card.style.animationDelay = `${index * 150}ms`;
+                // Add click handler for deep dive
+                card.onclick = () => toggleInsight(card, item.entity);
+
+                const verdictClass = item.verdict || 'Neutral';
+                const sourceText = item.sources ? item.sources.join(', ') : 'Web';
+
+                card.innerHTML = `
+                    <div class="toast-header">
+                        <span class="toast-title">${item.entity}</span>
+                        <span class="toast-type">${item.type}</span>
+                    </div>
+                    <div class="toast-body">
+                        ${item.summary}
+                         <div style="margin-top:5px; font-size:0.8em; color:#888;">
+                            Sources: ${sourceText}
+                            <div style="float:right; color:#007bff; font-weight:bold; font-size:1.1em;">&#x2193;</div>
+                        </div>
+                    </div>
+                     <div class="toast-footer">
+                        <span class="verdict ${verdictClass}">${item.verdict || 'Info'}</span>
+                        <span class="sources">via ${sourceText}</span>
+                    </div>
+                    <!-- Container for Deep Dive -->
+                    <div class="toast-details" id="details-${item.entity.replace(/\s+/g, '-')}">
+                        <!-- Loaded content goes here -->
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        async function toggleInsight(card, entity) {
+            // Check if already expanded
+            if (card.classList.contains('expanded')) {
+                card.classList.remove('expanded');
+                return;
+            }
+
+            // Collapse others (accordion style)
+            document.querySelectorAll('.toast-card.expanded').forEach(c => c.classList.remove('expanded'));
+
+            card.classList.add('expanded');
+            const detailsContainer = card.querySelector('.toast-details');
+
+            // If already loaded, just show (handled by CSS display:block). Reload if empty.
+            if (detailsContainer.innerHTML.trim() === '') {
+                detailsContainer.innerHTML = '<div class="details-loader">Thinking deeper...</div>';
+
+                try {
+                    const response = await fetch('/api/v1/fetch-insight-details', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ entity: entity })
+                    });
+
+                    if (!response.ok) throw new Error('API Failed');
+                    const data = await response.json();
+
+                    // Build News HTML
+                    let newsHtml = '<strong>Latest News:</strong><br>';
+                    if (data.news && data.news.length > 0) {
+                        data.news.forEach(n => {
+                            newsHtml += `
+                                <div class="news-item">
+                                    <a href="${n.url}" target="_blank" class="news-link">${n.title}</a>
+                                    <div class="news-meta">${n.source || 'News'} &bull; ${n.date || 'Recent'}</div>
+                                </div>
+                            `;
+                        });
+                    } else {
+                        newsHtml += '<small>No recent news found.</small><br>';
+                    }
+
+                    // Build Analysis HTML
+                    let analysisHtml = '<div style="margin-top:10px;"><strong>Analysis:</strong><br>';
+                    if (data.analysis && data.analysis.length > 0) {
+                        // Just take the first good snippet or join them
+                        analysisHtml += `<small>${data.analysis[0]}</small>`;
+                    } else {
+                        analysisHtml += '<small>No detailed analysis available.</small>';
+                    }
+                    analysisHtml += '</div>';
+
+                    detailsContainer.innerHTML = newsHtml + analysisHtml;
+
+                } catch (e) {
+                    detailsContainer.innerHTML = '<div style="color:red; font-size:0.9em;">Failed to load details.</div>';
+                    console.error(e);
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>

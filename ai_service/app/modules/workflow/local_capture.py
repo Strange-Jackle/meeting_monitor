@@ -152,9 +152,28 @@ class LocalCaptureService:
             self._audio_stream.close()
             self._audio_stream = None
         
+        # Force stop any remaining sounddevice streams
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except:
+            pass
+        
         # Wait for audio thread
         if self._audio_thread and self._audio_thread.is_alive():
             self._audio_thread.join(timeout=2.0)
+        
+        # Clear queues
+        while not self._screenshot_queue.empty():
+            try:
+                self._screenshot_queue.get_nowait()
+            except:
+                break
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+            except:
+                break
         
         print("[LocalCapture] Capture loops stopped")
     

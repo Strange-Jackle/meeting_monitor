@@ -27,6 +27,7 @@ from app.modules.summarization.service import SummarizationService
 from app.modules.extraction.gliner_service import GLiNERService
 from app.modules.intelligence.gemini_service import GeminiService
 from app.modules.odoo_client.client import OdooClient
+from app.modules.vision.face_sentiment import face_sentiment_loop
 
 
 class SessionStatus(Enum):
@@ -42,16 +43,18 @@ class SessionStatus(Enum):
 class SessionConfig:
     """Configuration for live assistant session."""
     # Analysis intervals
-    insight_interval: float = 5.0  # seconds between Gemini analysis
+    insight_interval: float = 30.0  # seconds between Gemini analysis
     transcript_chunk_interval: float = 10.0  # seconds of audio per transcription
     
     # Capture settings
     screen_interval: float = 2.0
+    capture_mode: str = "local"  # "local" or "remote" (remote = client streams audio)
     
     # Processing
     enable_vision: bool = True
     enable_transcription: bool = True
     enable_final_sync: bool = True  # Push to Odoo on session end
+    enable_face_sentiment: bool = True  # 30s cadence face sentiment analysis
 
 
 @dataclass
@@ -140,12 +143,15 @@ class LiveAssistantSession:
         # Tasks
         self._insight_task: Optional[asyncio.Task] = None
         self._transcription_task: Optional[asyncio.Task] = None
+        self._face_sentiment_task: Optional[asyncio.Task] = None
         
         # Callbacks
         self._on_hints_update: Optional[Callable[[List[str]], None]] = None
         self._on_transcript_update: Optional[Callable[[str], None]] = None
         self._on_status_change: Optional[Callable[[SessionStatus], None]] = None
         self._on_entities_update: Optional[Callable[[List[str]], None]] = None
+        self._on_battlecard: Optional[Callable[[Dict], None]] = None
+        self._on_face_sentiment: Optional[Callable[[Dict], None]] = None
         
         print("[LiveSession] Session initialized")
     
@@ -154,13 +160,22 @@ class LiveAssistantSession:
         on_hints_update: Optional[Callable[[List[str]], None]] = None,
         on_transcript_update: Optional[Callable[[str], None]] = None,
         on_status_change: Optional[Callable[[SessionStatus], None]] = None,
-        on_entities_update: Optional[Callable[[List[str]], None]] = None
+        on_entities_update: Optional[Callable[[List[str]], None]] = None,
+        on_battlecard: Optional[Callable[[Dict], None]] = None,
+        on_face_sentiment: Optional[Callable[[Dict], None]] = None
     ):
         """Set callbacks for real-time updates."""
         self._on_hints_update = on_hints_update
         self._on_transcript_update = on_transcript_update
         self._on_status_change = on_status_change
         self._on_entities_update = on_entities_update
+        self._on_battlecard = on_battlecard
+        self._on_face_sentiment = on_face_sentiment
+    
+    async def _broadcast_face_sentiment(self, payload: Dict[str, Any]):
+        """Broadcast face sentiment data to connected clients."""
+        if self._on_face_sentiment:
+            self._on_face_sentiment(payload)
     
     def _set_status(self, status: SessionStatus):
         """Update status and notify callback."""
@@ -179,17 +194,22 @@ class LiveAssistantSession:
         self.state.start_time = time.time()
         
         try:
-            # Initialize capture service
+            # Initialize capture service (always needed for screen capture)
             capture_config = CaptureConfig(
                 screen_interval=self.config.screen_interval,
                 audio_chunk_duration=self.config.transcript_chunk_interval
             )
             self.capture_service = LocalCaptureService(capture_config)
             
-            # Set capture callbacks
-            self.capture_service.set_callbacks(
-                on_audio_chunk=self._handle_audio_chunk
-            )
+            # Set capture callbacks - ONLY register audio callback if NOT remote mode
+            if self.config.capture_mode == "local":
+                print("[LiveSession] Mode: LOCAL (capturing audio from this machine)")
+                self.capture_service.set_callbacks(
+                    on_audio_chunk=self._handle_audio_chunk
+                )
+            else:
+                print("[LiveSession] Mode: REMOTE (audio will be streamed from clients)")
+                # No audio callback - audio comes via /audio-stream WebSocket
             
             # Start capture
             await self.capture_service.start()
@@ -198,8 +218,22 @@ class LiveAssistantSession:
             if self.config.enable_vision:
                 self._insight_task = asyncio.create_task(self._insight_loop())
             
+            # Start face sentiment loop (30-second cadence)
+            # Only in LOCAL mode - face sentiment captures THIS machine's screen
+            if self.config.enable_face_sentiment and self.config.capture_mode == "local":
+                self._face_sentiment_task = asyncio.create_task(
+                    face_sentiment_loop(
+                        session_id=self.state.session_id,
+                        broadcast_fn=self._broadcast_face_sentiment,
+                        interval=30.0
+                    )
+                )
+                print("[LiveSession] Face sentiment enabled (local mode)")
+            else:
+                print(f"[LiveSession] Face sentiment disabled (mode={self.config.capture_mode}, enabled={self.config.enable_face_sentiment})")
+            
             self._set_status(SessionStatus.RUNNING)
-            print("[LiveSession] Session started")
+            print("[LiveSession] Session started (with face sentiment)")
             
         except Exception as e:
             print(f"[LiveSession] Start error: {e}")
@@ -219,6 +253,17 @@ class LiveAssistantSession:
             return {"error": "Session not running"}
         
         self._set_status(SessionStatus.PROCESSING)
+        
+        # Stop face sentiment loop
+        if self._face_sentiment_task:
+            self._face_sentiment_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._face_sentiment_task),
+                    timeout=2.0
+                )
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
         
         # Stop insight loop with timeout
         if self._insight_task:
@@ -254,10 +299,14 @@ class LiveAssistantSession:
             }
         }
         
-        # Skip Odoo sync for now (can be done later to avoid timeout)
-        # TODO: Implement async background sync if needed
         if self.config.enable_final_sync and self.state.full_transcript:
-            result["lead"] = {"status": "skipped", "message": "Sync disabled for speed"}
+            # Run finalization (includes Odoo sync)
+            try:
+                lead_data = await self._finalize_lead()
+                result["lead"] = lead_data
+            except Exception as e:
+                print(f"[LiveSession] Finalization failed: {e}")
+                result["lead"] = {"error": str(e)}
         
         self._set_status(SessionStatus.COMPLETED)
         print(f"[LiveSession] Session completed. Duration: {self.state.duration:.1f}s")
@@ -363,6 +412,20 @@ class LiveAssistantSession:
                         if self._on_transcript_update:
                             formatted_text = self.transcriber.format_transcript_with_speakers(valid_segments)
                             self._on_transcript_update(formatted_text)
+                        
+                        # Placeholder for battlecard generation (assuming it happens here)
+                        # If a battlecard is generated based on the valid_segments,
+                        # it would be appended to self.state.battlecards and the callback triggered.
+                        # For example:
+                        # battlecard = self._generate_battlecard_from_segments(valid_segments)
+                        # if battlecard:
+                        #     self.state.battlecards.append(battlecard)
+                        #     if self._on_battlecard:
+                        #         self._on_battlecard(battlecard)
+                        
+                        # Re-broadcasting hints to keep UI fresh (if needed, though usually done in insight loop)
+                        if self._on_hints_update:
+                            self._on_hints_update(self.state.quick_hints)
                     else:
                         print("[LiveSession] All segments filtered as hallucinations")
                 
@@ -383,49 +446,105 @@ class LiveAssistantSession:
             try:
                 await asyncio.sleep(self.config.insight_interval)
                 
-                # Get latest screenshot
-                screenshot = self.capture_service.get_latest_screenshot()
-                if not screenshot:
-                    continue
-                
                 # Get current transcript context
                 transcript_context = self.state.full_transcript
-                if not transcript_context:
-                    transcript_context = "(No transcript yet)"
+                if not transcript_context or len(transcript_context) < 20:
+                    continue  # Not enough transcript to analyze
                 
-                # Convert screenshot to base64
-                screenshot_b64 = LocalCaptureService.screenshot_to_base64(screenshot)
+                # ========== GEMINI-POWERED ANALYSIS ==========
                 
-                # Call Gemini Vision
-                result = await self.gemini.get_vision_insights(
-                    screenshot_base64=screenshot_b64,
-                    transcript_context=transcript_context
+                # 1. Extract entities from transcript using GLiNER (fast, local)
+                entities = self.extractor.extract(transcript_context[-3000:])  # Last 3000 chars
+                
+                # 2. Generate smart hints using Gemini AI
+                # Use pre-initialized Gemini service (self.gemini) instead of creating new one
+                
+                # Convert entities to simple strings for Gemini
+                entity_texts = [e.text for e in entities] if entities else []
+                
+                result = await self.gemini.generate_sales_hints(
+                    transcript=transcript_context,
+                    entities=entity_texts,
+                    max_hints=3
                 )
                 
+                # 3. Update state
+                self.state.quick_hints = result.get("quick_hints", [])
+                self.state.detected_entities = [{"text": e.text, "label": e.label} for e in entities] if entities else []
                 self.state.gemini_calls += 1
-                self.state.screenshots_processed += 1
                 
-                # Update hints
-                if result.get("quick_hints"):
-                    self.state.quick_hints = result["quick_hints"]
-                    if self._on_hints_update:
-                        self._on_hints_update(result["quick_hints"])
-                    print(f"[LiveSession] Hints: {result['quick_hints']}")
+                print(f"[LiveSession] Gemini Insights: {len(self.state.quick_hints)} hints, {len(entities)} entities")
                 
-                # Update entities
-                new_entities = result.get("detected_entities", [])
-                for entity in new_entities:
-                    if entity and entity not in self.state.detected_entities:
-                        self.state.detected_entities.append(entity)
+                # 4. Deep Research: Check for competitors AND broader research topics
+                competitors = self.extractor.detect_competitors(entities)
+                research_topics = result.get("research_topics", [])
                 
-                # Always notify if we have entities (not just new ones)
-                if self.state.detected_entities and self._on_entities_update:
+                # Combine targets (max 2 per cycle to avoid overload)
+                targets = list(set(competitors + research_topics))[:2]
+                
+                for target in targets:
+                    # Skip if we already have a battlecard for this target
+                    if target in [bc.get("competitor") for bc in self.state.battlecards]:
+                        continue
+                        
+                    try:
+                        # Generate Smart Battlecard (Gemini + Web Insight)
+                        from app.modules.intelligence.gemini_service import GeminiService
+                        from app.modules.intelligence.web_insight_service import WebInsightService
+                        
+                        # Generate base card with Gemini
+                        battlecard = await self.gemini.get_battlecard(
+                            competitor_name=target,
+                            context=transcript_context[-500:]
+                        )
+                        
+                        # Enhance with Web Insights
+                        try:
+                            web_service = WebInsightService()
+                            web_insights = {"negative_findings": [], "sources": [], "verdict": ""}
+                            
+                            async for update in web_service.get_negative_insights_stream(target):
+                                if update.get("type") == "fast" and update.get("data"):
+                                    data = update["data"]
+                                    web_insights["negative_findings"].append(data.get("summary", ""))
+                                    web_insights["sources"] = data.get("sources", [])
+                                    web_insights["verdict"] = data.get("verdict", "")
+                                elif update.get("type") == "deep" and update.get("data"):
+                                    data = update["data"]
+                                    if data.get("evidence"):
+                                        web_insights["negative_findings"].extend(data["evidence"])
+                                    web_insights["verdict"] = data.get("verdict", web_insights.get("verdict", ""))
+                            
+                            battlecard["web_research"] = web_insights
+                            print(f"[LiveSession] Web insight: {web_insights.get('verdict', 'N/A')} for {target}")
+                            
+                        except Exception as e:
+                            print(f"[LiveSession] Web insight error for {target}: {e}")
+                            battlecard["web_research"] = {"negative_findings": [], "sources": []}
+                        
+                        self.state.battlecards.append(battlecard)
+                        print(f"[LiveSession] Smart Card generated for: {target}")
+                        
+                        # Broadcast to UI
+                        if self._on_battlecard:
+                            self._on_battlecard(battlecard)
+                            
+                    except Exception as e:
+                        print(f"[LiveSession] Smart Card error for {target}: {e}")
+
+                # 5. Notify UI
+                if self._on_hints_update:
+                    self._on_hints_update(self.state.quick_hints)
+                
+                if self._on_entities_update:
                     self._on_entities_update(self.state.detected_entities)
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"[LiveSession] Insight error: {e}")
+                import traceback
+                traceback.print_exc()
                 await asyncio.sleep(1.0)
         
         print("[LiveSession] Insight loop ended")
@@ -434,7 +553,7 @@ class LiveAssistantSession:
         """
         Finalize session and create Odoo lead.
         
-        Returns lead creation result.
+        Returns lead creation result with full meeting JSON.
         """
         transcript = self.state.full_transcript
         if not transcript:
@@ -466,31 +585,70 @@ class LiveAssistantSession:
             elif entity.label == "organization" and not lead_company:
                 lead_company = entity.text
         
-        # 4. Create Odoo lead
-        # 4. Create Odoo lead (in background thread to prevent blocking)
+        # 4. Build meeting JSON object
+        meeting_json = {
+            "session_id": self.state.session_id,
+            "duration_seconds": round(self.state.duration, 1),
+            "transcript": transcript,
+            "transcript_with_speakers": self.state.formatted_transcript,
+            "summary": summary,
+            "entities": [
+                {"text": e.text, "label": e.label, "score": round(e.score, 2)}
+                for e in entities
+            ],
+            "starred_hints": self.state.starred_hints,
+            "battlecards": self.state.battlecards,
+            "detected_entities": self.state.detected_entities,
+            "stats": {
+                "screenshots_processed": self.state.screenshots_processed,
+                "audio_chunks_processed": self.state.audio_chunks_processed,
+                "gliner_calls": self.state.gemini_calls
+            },
+            "lead": {
+                "name": lead_name,
+                "email": lead_email,
+                "phone": lead_phone,
+                "company": lead_company
+            }
+        }
+        
+        print(f"[LiveSession] Meeting JSON prepared: {len(meeting_json['entities'])} entities, {len(meeting_json['starred_hints'])} starred hints")
+        
+        # 5. Create Odoo lead (in background thread to prevent blocking)
+        from app.modules.core.domain import LeadCandidate
+        
+        lead_candidate = LeadCandidate(
+            name=lead_name,
+            email=lead_email,
+            phone=lead_phone,
+            company=lead_company,
+            notes=summary,
+            source_summary=f"Duration: {round(self.state.duration/60, 1)} mins | Entities: {len(entities)} | Hints: {len(self.state.starred_hints)}"
+        )
+        
+        lead_id = None
         try:
-            print("[LiveSession] Syncing to Odoo (background)...")
-            lead_result = await asyncio.to_thread(
+            print("[LiveSession] Syncing to Odoo...")
+            lead_id = await asyncio.to_thread(
                 self.odoo.create_lead,
-                {
-                    "name": lead_name,
-                    "email": lead_email,
-                    "phone": lead_phone,
-                    "company": lead_company,
-                    "notes": summary,
-                    "source": "Stealth Assistant",
-                    "raw_transcript": transcript[:5000]
-                }
+                lead_candidate,
+                self.state.starred_hints
             )
+            print(f"[LiveSession] Odoo Lead Created: ID {lead_id}")
         except Exception as e:
-            print(f"[LiveSession] Odoo Sync Failed (Non-critical): {e}")
-            lead_result = {"id": 0, "status": "failed_local_only"}
+            # Handle connection errors gracefully (common in dev environment)
+            if "No connection could be made" in str(e) or "10061" in str(e):
+                print(f"[LiveSession] Odoo Sync Skipped: Service not running (Connection Refused)")
+            else:
+                print(f"[LiveSession] Odoo Sync Failed: {e}")
+            # Do not print full traceback for connection errors to keep logs clean
         
         return {
-            "lead_id": lead_result.get("id"),
+            "lead_id": lead_id,
             "lead_name": lead_name,
             "summary": summary,
-            "entities_count": len(entities)
+            "entities_count": len(entities),
+            "meeting_json": meeting_json
         }
     
     # ==================== STATUS ACCESSORS ====================

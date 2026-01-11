@@ -1,0 +1,132 @@
+# Sales Intelligence Pro - Docker Compose
+# GPU-accelerated real-time sales assistant
+#
+# REQUIREMENTS:
+# - Docker with NVIDIA Container Toolkit
+# - NVIDIA GPU with CUDA 11.8+
+# - ~10GB disk space for models
+#
+# USAGE:
+#   docker-compose up -d
+#
+# NOTE: This is a proof-of-concept. Full GPU passthrough
+# and audio capture in containers requires additional setup.
+
+version: '3.8'
+
+services:
+  # ===========================================
+  # Sales Intelligence Pro API
+  # ===========================================
+  sales-intelligence-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sales-intelligence-api
+    
+    # GPU Access (requires nvidia-docker)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    ports:
+      - "8000:8000"
+    
+    environment:
+      - DEVICE=cuda
+      - COMPUTE_TYPE=float16
+      - WHISPER_MODEL_SIZE=small
+      - HF_TOKEN=${HF_TOKEN:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ODOO_URL=http://odoo:8069
+      - ODOO_DB=odoodb
+      - ODOO_USER=admin
+      - ODOO_PASSWORD=admin
+      - DEMO_SIMULATION_MODE=false
+    
+    volumes:
+      # Persist model cache
+      - huggingface-cache:/root/.cache/huggingface
+      # Persist database
+      - ./data:/app/data
+    
+    depends_on:
+      - odoo
+      - postgres
+    
+    networks:
+      - sales-network
+    
+    restart: unless-stopped
+
+  # ===========================================
+  # Odoo CRM
+  # ===========================================
+  odoo:
+    image: odoo:17.0
+    container_name: odoo-crm
+    
+    ports:
+      - "8069:8069"
+    
+    environment:
+      - HOST=postgres
+      - USER=odoo
+      - PASSWORD=odoo
+    
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - odoo-addons:/mnt/extra-addons
+    
+    depends_on:
+      - postgres
+    
+    networks:
+      - sales-network
+    
+    restart: unless-stopped
+
+  # ===========================================
+  # PostgreSQL (for Odoo)
+  # ===========================================
+  postgres:
+    image: postgres:15
+    container_name: odoo-postgres
+    
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=odoo
+      - POSTGRES_PASSWORD=odoo
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data/pgdata
+    
+    networks:
+      - sales-network
+    
+    restart: unless-stopped
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  huggingface-cache:
+    name: sales-intelligence-hf-cache
+  postgres-data:
+    name: odoo-postgres-data
+  odoo-data:
+    name: odoo-data
+  odoo-addons:
+    name: odoo-addons
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  sales-network:
+    driver: bridge

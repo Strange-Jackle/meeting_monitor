@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment Variables (PRIVATE!)
+.env
+*.env
+
+# Database (local SQLite)
+*.db
+*.sqlite3
+meeting_monitor.db
+
+# Logs & Temp
+*.log
+logs/
+temp_audio/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio/Media artifacts
+*.wav
+*.mp3
+*.webm
+test_*.png
+
+# Model cache (large files)
+hub/
+models/
+*.pt
+*.bin
+*.onnx
+*.safetensors
+
+# HuggingFace cache
+.cache/
+
+# Deprecated
+vexa_engine/
+
+# Development
+.gemini/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Scripts
+check_whisperx.py
